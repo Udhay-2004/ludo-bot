@@ -1,3 +1,4 @@
+import os
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
@@ -7,7 +8,8 @@ from telegram.ext import (
     MessageHandler, filters
 )
 
-TOKEN = "8451916354:AAEH1BZMyK63thNfuS7scDR1q7w6Q1nWeEw"
+# ✅ Token from Railway environment variable
+TOKEN = os.getenv("TOKEN")
 
 games = {}
 
@@ -85,7 +87,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=query.message.reply_markup
         )
 
-# ----- START GAME -----
+# ----- START -----
     elif query.data == "begin":
 
         if len(game.players) < 2:
@@ -131,7 +133,6 @@ async def process_roll(message, game, player, dice):
 
     text = f"🎲 {player} rolled {dice}\n"
 
-    # Enter board
     if pos == -1:
         if dice == 6:
             pos = 0
@@ -141,13 +142,13 @@ async def process_roll(message, game, player, dice):
     else:
         pos += dice
 
-    # Kill logic
+    # Kill
     for p in game.players:
         if p != player and game.positions[p] == pos:
             game.positions[p] = -1
             text += f"Sent {p} home!\n"
 
-    # Win check
+    # Win
     if pos >= 50:
         await message.reply_text(f"🏆 {player} wins the game!")
         del games[chat_id]
@@ -155,7 +156,6 @@ async def process_roll(message, game, player, dice):
 
     game.positions[player] = pos
 
-    # Next turn
     if dice != 6:
         game.next_turn()
 
