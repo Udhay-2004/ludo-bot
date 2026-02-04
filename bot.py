@@ -8,7 +8,6 @@ from telegram.ext import (
     MessageHandler, filters
 )
 
-# ✅ Token from Railway environment variable
 TOKEN = os.getenv("TOKEN")
 
 games = {}
@@ -29,6 +28,30 @@ class LudoGame:
         self.turn_index = (self.turn_index + 1) % len(self.players)
 
 
+# ---------------- HELP ----------------
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🎲 *Ludo Help*\n\n"
+        "/start — Create lobby\n"
+        "/help — Show help\n"
+        "/rules — Game rules\n\n"
+        "On your turn send 🎲 to roll.",
+        parse_mode="Markdown"
+    )
+
+# ---------------- RULES ----------------
+
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📜 *Ludo Rules*\n\n"
+        "• Roll 6 to enter board\n"
+        "• Landing on player sends them home\n"
+        "• Roll 6 = extra turn\n"
+        "• Reach 50 to win 🏆",
+        parse_mode="Markdown"
+    )
+
 # ---------------- START ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -41,16 +64,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        "🎲 Welcome to Ludo Bot!\n\n"
-        "Play Ludo with friends using real 🎲 dice.\n\n"
-        "• 2–6 players\n"
-        "• First to reach 50 wins 🏆\n\n"
-        "Click Join to enter the lobby!",
+        "🎲 *Welcome to Ludo Bot!*\n\n"
+        "Play Ludo with real 🎲 dice.\n"
+        "2–6 players supported.\n\n"
+        "Click Join to enter!",
+        parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
-# ---------------- BUTTON HANDLER ----------------
+# ---------------- BUTTONS ----------------
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -63,47 +86,41 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not game:
         return
 
-# ----- JOIN -----
+# JOIN
     if query.data == "join":
 
-        if game.started:
-            await query.answer("Game already started")
-            return
-
         if user in game.players:
-            await query.answer("Already joined")
             return
 
         if len(game.players) >= 6:
-            await query.answer("Lobby full (6/6)")
+            await query.answer("Lobby full")
             return
 
         game.players.append(user)
         game.positions[user] = -1
 
         await query.edit_message_text(
-            "🎲 Ludo Lobby\n\nPlayers:\n" +
-            "\n".join(game.players),
+            "🎲 Lobby\n\n" + "\n".join(game.players),
             reply_markup=query.message.reply_markup
         )
 
-# ----- START -----
+# START
     elif query.data == "begin":
 
         if len(game.players) < 2:
-            await query.answer("Minimum 2 players needed")
+            await query.answer("Need 2+ players")
             return
 
         game.started = True
 
         await query.edit_message_text(
-            f"🎉 Game Started!\n\n"
-            f"👉 {game.current_player()} goes first\n"
-            f"Send 🎲 to roll"
+            f"🎉 Game Started!\n"
+            f"{game.current_player()} goes first\n"
+            f"Send 🎲"
         )
 
 
-# ---------------- DICE HANDLER ----------------
+# ---------------- DICE ----------------
 
 async def handle_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -125,7 +142,7 @@ async def handle_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_roll(msg, game, user, dice)
 
 
-# ---------------- ROLL LOGIC ----------------
+# ---------------- ROLL ----------------
 
 async def process_roll(message, game, player, dice):
     chat_id = message.chat.id
@@ -138,19 +155,17 @@ async def process_roll(message, game, player, dice):
             pos = 0
             text += "Entered board!\n"
         else:
-            text += "Need 6 to enter\n"
+            text += "Need 6\n"
     else:
         pos += dice
 
-    # Kill
     for p in game.players:
         if p != player and game.positions[p] == pos:
             game.positions[p] = -1
             text += f"Sent {p} home!\n"
 
-    # Win
     if pos >= 50:
-        await message.reply_text(f"🏆 {player} wins the game!")
+        await message.reply_text(f"🏆 {player} wins!")
         del games[chat_id]
         return
 
@@ -159,8 +174,7 @@ async def process_roll(message, game, player, dice):
     if dice != 6:
         game.next_turn()
 
-    next_p = game.current_player()
-    text += f"Next: {next_p}"
+    text += f"Next: {game.current_player()}"
 
     await message.reply_text(text)
 
@@ -170,6 +184,9 @@ async def process_roll(message, game, player, dice):
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("help", help_cmd))
+app.add_handler(CommandHandler("rules", rules))
+
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL, handle_dice))
 
