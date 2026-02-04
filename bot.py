@@ -11,6 +11,7 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 
 games = {}
+leaderboard = {}
 
 # ---------------- GAME CLASS ----------------
 
@@ -34,8 +35,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎲 *Ludo Help*\n\n"
         "/start — Create lobby\n"
-        "/help — Show help\n"
-        "/rules — Game rules\n\n"
+        "/help — Help menu\n"
+        "/rules — Game rules\n"
+        "/stats — Leaderboard\n\n"
         "On your turn send 🎲 to roll.",
         parse_mode="Markdown"
     )
@@ -51,6 +53,26 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Reach 50 to win 🏆",
         parse_mode="Markdown"
     )
+
+# ---------------- STATS ----------------
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not leaderboard:
+        await update.message.reply_text("No stats to show.")
+        return
+
+    text = "🏆 Leaderboard\n\n"
+    sorted_lb = sorted(
+        leaderboard.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    for i,(p,w) in enumerate(sorted_lb,1):
+        text += f"{i}. {p} — {w} wins\n"
+
+    await update.message.reply_text(text)
+
 
 # ---------------- START ----------------
 
@@ -73,7 +95,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------------- BUTTONS ----------------
+# ---------------- BUTTON HANDLER ----------------
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -89,11 +111,14 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # JOIN
     if query.data == "join":
 
+        if game.started:
+            return
+
         if user in game.players:
             return
 
         if len(game.players) >= 6:
-            await query.answer("Lobby full")
+            await query.answer("Lobby full (6/6)")
             return
 
         game.players.append(user)
@@ -104,23 +129,23 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=query.message.reply_markup
         )
 
-# START
+# START GAME
     elif query.data == "begin":
 
         if len(game.players) < 2:
-            await query.answer("Need 2+ players")
+            await query.answer("Minimum 2 players needed")
             return
 
         game.started = True
 
         await query.edit_message_text(
-            f"🎉 Game Started!\n"
+            f"🎉 Game Started!\n\n"
             f"{game.current_player()} goes first\n"
-            f"Send 🎲"
+            f"Send 🎲 to roll"
         )
 
 
-# ---------------- DICE ----------------
+# ---------------- DICE HANDLER ----------------
 
 async def handle_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -142,7 +167,7 @@ async def handle_dice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_roll(msg, game, user, dice)
 
 
-# ---------------- ROLL ----------------
+# ---------------- ROLL LOGIC ----------------
 
 async def process_roll(message, game, player, dice):
     chat_id = message.chat.id
@@ -159,12 +184,15 @@ async def process_roll(message, game, player, dice):
     else:
         pos += dice
 
+    # Kill logic
     for p in game.players:
         if p != player and game.positions[p] == pos:
             game.positions[p] = -1
             text += f"Sent {p} home!\n"
 
+    # Win check
     if pos >= 50:
+        leaderboard[player] = leaderboard.get(player,0)+1
         await message.reply_text(f"🏆 {player} wins!")
         del games[chat_id]
         return
@@ -186,6 +214,7 @@ app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("help", help_cmd))
 app.add_handler(CommandHandler("rules", rules))
+app.add_handler(CommandHandler("stats", stats))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL, handle_dice))
