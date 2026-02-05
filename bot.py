@@ -1,8 +1,5 @@
 import os
-from telegram import (
-    Update, InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
     CallbackQueryHandler, ContextTypes,
@@ -21,13 +18,14 @@ EMOJIS=["🟥","🟦","🟩","🟨"]
 # ---------------- GAME ----------------
 
 class LudoGame:
-    def __init__(self):
+    def __init__(self,creator):
         self.players=[]
         self.positions={}
         self.turn=0
         self.started=False
         self.names={}
         self.colors={}
+        self.creator=creator
 
     def current(self):
         return self.players[self.turn]
@@ -62,24 +60,12 @@ def build_track(g):
         "".join(t[30:40])+"🏆"
     )
 
-# ---------------- STATS ----------------
+# ---------------- ADMIN CHECK ----------------
 
-async def stats(update,context):
+async def is_admin(update, user_id):
 
-    if not leaderboard:
-        await update.message.reply_text("No stats yet.")
-        return
-
-    text="🏆 Leaderboard\n\n"
-
-    for i,(name,wins) in enumerate(
-        sorted(leaderboard.items(),
-               key=lambda x:x[1],
-               reverse=True),1):
-
-        text+=f"{i}. {name} - {wins} wins\n"
-
-    await update.message.reply_text(text)
+    member = await update.effective_chat.get_member(user_id)
+    return member.status in ["administrator","creator"]
 
 # ---------------- START ----------------
 
@@ -90,7 +76,9 @@ async def start(update,context):
         return
 
     chat=update.effective_chat.id
-    games[chat]=LudoGame()
+    creator=update.effective_user.id
+
+    games[chat]=LudoGame(creator)
 
     kb=[[InlineKeyboardButton("🎮 Join",callback_data="join_btn")],
         [InlineKeyboardButton("🚀 Start",callback_data="start_game")]]
@@ -100,7 +88,7 @@ async def start(update,context):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-# ---------------- JOIN LOGIC ----------------
+# ---------------- ADD PLAYER ----------------
 
 def add_player(g,user):
 
@@ -119,13 +107,12 @@ def add_player(g,user):
 
     return "ok"
 
-# ---------------- JOIN CMD ----------------
+# ---------------- JOIN ----------------
 
 async def join_cmd(update,context):
 
     chat=update.effective_chat.id
     user=update.effective_user
-
     g=games.get(chat)
 
     if not g:
@@ -135,9 +122,9 @@ async def join_cmd(update,context):
     r=add_player(g,user)
 
     if r=="already":
-        await update.message.reply_text("You already joined.")
+        await update.message.reply_text("Already joined.")
     elif r=="full":
-        await update.message.reply_text("Game full (4 players).")
+        await update.message.reply_text("Game full.")
     else:
         await update.message.reply_text(
             f"{g.colors[user.id]} {g.names[user.id]} joined!"
@@ -152,26 +139,79 @@ async def leave_cmd(update,context):
     g=games.get(chat)
 
     if not g or user.id not in g.players:
-        await update.message.reply_text("You are not in game.")
         return
 
     name=g.names[user.id]
-    idx=g.players.index(user.id)
 
     g.players.remove(user.id)
     g.positions.pop(user.id,None)
     g.names.pop(user.id,None)
     g.colors.pop(user.id,None)
 
-    if idx<g.turn:
-        g.turn-=1
+    await update.message.reply_text(f"{name} left.")
 
-    if len(g.players)<2:
-        await update.message.reply_text("Game ended.")
-        del games[chat]
+# ---------------- KICK ----------------
+
+async def kick_cmd(update,context):
+
+    chat=update.effective_chat.id
+    user=update.effective_user
+    g=games.get(chat)
+
+    if not g:
         return
 
-    await update.message.reply_text(f"{name} left.")
+    # permission check
+    admin = await is_admin(update,user.id)
+
+    if not admin and user.id!=g.creator:
+        creator_name=g.names.get(g.creator,"Creator")
+        await update.message.reply_text(
+            f"❌ Only admins or game creator ({creator_name}) can kick."
+        )
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "Reply to player to kick."
+        )
+        return
+
+    target=update.message.reply_to_message.from_user.id
+
+    if target not in g.players:
+        return
+
+    name=g.names[target]
+
+    g.players.remove(target)
+    g.positions.pop(target,None)
+    g.names.pop(target,None)
+    g.colors.pop(target,None)
+
+    await update.message.reply_text(f"❌ {name} kicked.")
+
+# ---------------- END GAME ----------------
+
+async def end_cmd(update,context):
+
+    chat=update.effective_chat.id
+    user=update.effective_user
+    g=games.get(chat)
+
+    if not g:
+        return
+
+    admin=await is_admin(update,user.id)
+
+    if not admin and user.id!=g.creator:
+        await update.message.reply_text(
+            "❌ Only admin or creator can end game."
+        )
+        return
+
+    del games[chat]
+    await update.message.reply_text("🏁 Game ended.")
 
 # ---------------- BUTTONS ----------------
 
@@ -186,21 +226,15 @@ async def button(update,context):
 
     if not g: return
 
-# JOIN BUTTON
     if q.data=="join_btn":
 
         r=add_player(g,user)
 
-        if r=="already":
-            await q.answer("Already joined")
-        elif r=="full":
-            await q.answer("Game full")
-        else:
+        if r=="ok":
             await q.message.reply_text(
                 f"{g.colors[user.id]} {g.names[user.id]} joined!"
             )
 
-# START BUTTON
     elif q.data=="start_game":
 
         if len(g.players)<2:
@@ -213,40 +247,6 @@ async def button(update,context):
             build_track(g)+
             f"\n👉 {g.names[g.current()]}'s turn 🎲"
         )
-
-# KICK BUTTON
-    elif q.data.startswith("kick_"):
-
-        uid=int(q.data.split("_")[1])
-
-        if uid not in g.players:
-            return
-
-        name=g.names[uid]
-
-        g.players.remove(uid)
-        g.positions.pop(uid,None)
-        g.names.pop(uid,None)
-        g.colors.pop(uid,None)
-
-        await q.message.reply_text(f"❌ {name} kicked!")
-
-# ---------------- SHOW TURN ----------------
-
-async def show_turn(msg,g):
-
-    kb=[[
-        InlineKeyboardButton(
-            f"Kick {g.names[p]}",
-            callback_data=f"kick_{p}"
-        ) for p in g.players if p!=g.current()
-    ]]
-
-    await msg.reply_text(
-        build_track(g)+
-        f"\n👉 {g.names[g.current()]}'s turn 🎲",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
 
 # ---------------- DICE ----------------
 
@@ -276,26 +276,16 @@ async def roll(msg,g,player,dice):
     if pos==-1:
         if dice==6:
             pos=0
-            text+="Entered!\n"
         else:
-            text+="Need 6\n"
             g.next()
-            await msg.reply_text(text)
-            await show_turn(msg,g)
+            await msg.reply_text(text+"Need 6")
             return
     else:
         if pos+dice>TRACK_LENGTH:
-            text+="Need exact roll\n"
             g.next()
-            await msg.reply_text(text)
-            await show_turn(msg,g)
+            await msg.reply_text(text+"Need exact roll")
             return
         pos+=dice
-
-    for p in g.players:
-        if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
-            g.positions[p]=-1
-            text+=f"💥 Killed {g.names[p]}\n"
 
     if pos==TRACK_LENGTH:
 
@@ -305,15 +295,13 @@ async def roll(msg,g,player,dice):
         await msg.reply_text(f"🥇 {name} finished!")
 
         g.players.remove(player)
-        g.positions.pop(player,None)
 
         if len(g.players)<=1:
-            await msg.reply_text("🏁 Game Over!")
             del games[chat]
+            await msg.reply_text("🏁 Game Over")
             return
 
         g.turn%=len(g.players)
-        await show_turn(msg,g)
         return
 
     g.positions[player]=pos
@@ -321,8 +309,10 @@ async def roll(msg,g,player,dice):
     if dice!=6:
         g.next()
 
-    await msg.reply_text(text)
-    await show_turn(msg,g)
+    await msg.reply_text(
+        text+build_track(g)+
+        f"\n👉 {g.names[g.current()]}'s turn 🎲"
+    )
 
 # ---------------- RUN ----------------
 
@@ -331,10 +321,11 @@ app=ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("start",start))
 app.add_handler(CommandHandler("join",join_cmd))
 app.add_handler(CommandHandler("leave",leave_cmd))
-app.add_handler(CommandHandler("stats",stats))
+app.add_handler(CommandHandler("kick",kick_cmd))
+app.add_handler(CommandHandler("end",end_cmd))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo running perfect...")
+print("Ludo running admin mode...")
 app.run_polling()
