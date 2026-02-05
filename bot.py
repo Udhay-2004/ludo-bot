@@ -6,7 +6,7 @@ from telegram.ext import (
     MessageHandler, filters
 )
 
-TOKEN=os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN")
 
 games={}
 leaderboard={}
@@ -62,9 +62,8 @@ def build_track(g):
 
 # ---------------- ADMIN CHECK ----------------
 
-async def is_admin(update, user_id):
-
-    member = await update.effective_chat.get_member(user_id)
+async def is_admin(update,user_id):
+    member=await update.effective_chat.get_member(user_id)
     return member.status in ["administrator","creator"]
 
 # ---------------- START ----------------
@@ -158,23 +157,18 @@ async def kick_cmd(update,context):
     user=update.effective_user
     g=games.get(chat)
 
-    if not g:
-        return
+    if not g: return
 
-    # permission check
-    admin = await is_admin(update,user.id)
+    admin=await is_admin(update,user.id)
 
     if not admin and user.id!=g.creator:
-        creator_name=g.names.get(g.creator,"Creator")
         await update.message.reply_text(
-            f"❌ Only admins or game creator ({creator_name}) can kick."
+            "❌ Only admin or creator can kick."
         )
         return
 
     if not update.message.reply_to_message:
-        await update.message.reply_text(
-            "Reply to player to kick."
-        )
+        await update.message.reply_text("Reply to player to kick.")
         return
 
     target=update.message.reply_to_message.from_user.id
@@ -191,7 +185,7 @@ async def kick_cmd(update,context):
 
     await update.message.reply_text(f"❌ {name} kicked.")
 
-# ---------------- END GAME ----------------
+# ---------------- END ----------------
 
 async def end_cmd(update,context):
 
@@ -199,14 +193,13 @@ async def end_cmd(update,context):
     user=update.effective_user
     g=games.get(chat)
 
-    if not g:
-        return
+    if not g: return
 
     admin=await is_admin(update,user.id)
 
     if not admin and user.id!=g.creator:
         await update.message.reply_text(
-            "❌ Only admin or creator can end game."
+            "❌ Only admin or creator can end."
         )
         return
 
@@ -227,9 +220,7 @@ async def button(update,context):
     if not g: return
 
     if q.data=="join_btn":
-
         r=add_player(g,user)
-
         if r=="ok":
             await q.message.reply_text(
                 f"{g.colors[user.id]} {g.names[user.id]} joined!"
@@ -264,7 +255,7 @@ async def handle_dice(update,context):
 
     await roll(msg,g,user.id,msg.dice.value)
 
-# ---------------- ROLL ----------------
+# ---------------- ROLL (FIXED) ----------------
 
 async def roll(msg,g,player,dice):
 
@@ -273,20 +264,39 @@ async def roll(msg,g,player,dice):
 
     text=f"{g.colors[player]} {g.names[player]} rolled {dice}\n"
 
+# ENTER BOARD
     if pos==-1:
         if dice==6:
             pos=0
+            text+="Entered!\n"
         else:
+            text+="Need 6\n"
             g.next()
-            await msg.reply_text(text+"Need 6")
+            await msg.reply_text(text)
+            await msg.reply_text(
+                f"👉 {g.names[g.current()]}'s turn 🎲"
+            )
             return
+
+# NORMAL MOVE
     else:
         if pos+dice>TRACK_LENGTH:
+            text+="Need exact roll\n"
             g.next()
-            await msg.reply_text(text+"Need exact roll")
+            await msg.reply_text(text)
+            await msg.reply_text(
+                f"👉 {g.names[g.current()]}'s turn 🎲"
+            )
             return
         pos+=dice
 
+# KILL
+    for p in g.players:
+        if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
+            g.positions[p]=-1
+            text+=f"💥 Killed {g.names[p]}\n"
+
+# FINISH
     if pos==TRACK_LENGTH:
 
         name=g.names[player]
@@ -295,22 +305,30 @@ async def roll(msg,g,player,dice):
         await msg.reply_text(f"🥇 {name} finished!")
 
         g.players.remove(player)
+        g.positions.pop(player,None)
 
         if len(g.players)<=1:
-            del games[chat]
             await msg.reply_text("🏁 Game Over")
+            del games[chat]
             return
 
         g.turn%=len(g.players)
+
+        await msg.reply_text(
+            f"👉 {g.names[g.current()]}'s turn 🎲"
+        )
         return
 
+# SAVE
     g.positions[player]=pos
 
+# NEXT TURN
     if dice!=6:
         g.next()
 
+    await msg.reply_text(text)
     await msg.reply_text(
-        text+build_track(g)+
+        build_track(g)+
         f"\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
@@ -327,5 +345,5 @@ app.add_handler(CommandHandler("end",end_cmd))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo running admin mode...")
+print("Ludo running final...")
 app.run_polling()
