@@ -60,6 +60,36 @@ def build_track(g):
         "".join(t[30:40])+"🏆"
     )
 
+# ---------------- LEADERBOARD TEXT ----------------
+
+def leaderboard_text():
+
+    if not leaderboard:
+        return "🏆 Leaderboard\n\nNo wins yet."
+
+    text="🏆 Leaderboard\n\n"
+
+    sorted_lb=sorted(
+        leaderboard.items(),
+        key=lambda x:x[1],
+        reverse=True
+    )
+
+    medals=["🥇","🥈","🥉"]
+
+    for i,(name,wins) in enumerate(sorted_lb):
+        medal = medals[i] if i<3 else "🏅"
+        text+=f"{medal} {name} — {wins} wins\n"
+
+    return text
+
+# ---------------- STATS COMMAND ----------------
+
+async def stats(update,context):
+    await update.message.reply_text(
+        leaderboard_text()
+    )
+
 # ---------------- ADMIN CHECK ----------------
 
 async def is_admin(update,user_id):
@@ -255,7 +285,7 @@ async def handle_dice(update,context):
 
     await roll(msg,g,user.id,msg.dice.value)
 
-# ---------------- ROLL (FIXED) ----------------
+# ---------------- ROLL ----------------
 
 async def roll(msg,g,player,dice):
 
@@ -264,7 +294,6 @@ async def roll(msg,g,player,dice):
 
     text=f"{g.colors[player]} {g.names[player]} rolled {dice}\n"
 
-# ENTER BOARD
     if pos==-1:
         if dice==6:
             pos=0
@@ -277,8 +306,6 @@ async def roll(msg,g,player,dice):
                 f"👉 {g.names[g.current()]}'s turn 🎲"
             )
             return
-
-# NORMAL MOVE
     else:
         if pos+dice>TRACK_LENGTH:
             text+="Need exact roll\n"
@@ -290,13 +317,7 @@ async def roll(msg,g,player,dice):
             return
         pos+=dice
 
-# KILL
-    for p in g.players:
-        if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
-            g.positions[p]=-1
-            text+=f"💥 Killed {g.names[p]}\n"
-
-# FINISH
+    # FINISH
     if pos==TRACK_LENGTH:
 
         name=g.names[player]
@@ -307,8 +328,10 @@ async def roll(msg,g,player,dice):
         g.players.remove(player)
         g.positions.pop(player,None)
 
+        # GAME END
         if len(g.players)<=1:
-            await msg.reply_text("🏁 Game Over")
+            await msg.reply_text("🏁 Game Over!")
+            await msg.reply_text(leaderboard_text())
             del games[chat]
             return
 
@@ -319,10 +342,8 @@ async def roll(msg,g,player,dice):
         )
         return
 
-# SAVE
     g.positions[player]=pos
 
-# NEXT TURN
     if dice!=6:
         g.next()
 
@@ -341,9 +362,10 @@ app.add_handler(CommandHandler("join",join_cmd))
 app.add_handler(CommandHandler("leave",leave_cmd))
 app.add_handler(CommandHandler("kick",kick_cmd))
 app.add_handler(CommandHandler("end",end_cmd))
+app.add_handler(CommandHandler("stats",stats))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo running final...")
+print("Ludo running with stats...")
 app.run_polling()
