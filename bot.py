@@ -14,8 +14,6 @@ leaderboard={}
 
 TRACK_LENGTH=40
 SAFE_TILES={5,10,15,20,25,30,35}
-POWER_TILES={8:"boost",18:"bomb",28:"boost"}
-
 EMOJIS=["🟥","🟦","🟩","🟨"]
 
 # ---------------- GAME ----------------
@@ -32,7 +30,7 @@ class LudoGame:
     def current(self): return self.players[self.turn]
     def next(self): self.turn=(self.turn+1)%len(self.players)
 
-# ---------------- TAG HELPER ----------------
+# ---------------- TAG ----------------
 
 def tag(user):
     if user.username:
@@ -49,7 +47,8 @@ def build_track(g):
             t[pos]=g.colors[p]
 
     for s in SAFE_TILES:
-        if t[s]=="⬜": t[s]="⭐"
+        if t[s]=="⬜":
+            t[s]="⭐"
 
     l1="".join(t[:10])
     l2="".join(t[10:20])
@@ -58,11 +57,42 @@ def build_track(g):
 
     return f"🏁{l1}\n{l2}\n{l3}\n{l4}🏆"
 
+# ---------------- STATS ----------------
+
+async def stats(update:Update,context:ContextTypes.DEFAULT_TYPE):
+
+    if not leaderboard:
+        await update.message.reply_text("No stats to show.")
+        return
+
+    text="🏆 Leaderboard\n\n"
+
+    sorted_lb=sorted(
+        leaderboard.items(),
+        key=lambda x:x[1],
+        reverse=True
+    )
+
+    for i,(uid,wins) in enumerate(sorted_lb,1):
+
+        name=f"User {uid}"
+        color=""
+
+        for g in games.values():
+            if uid in g.usernames:
+                name=g.usernames[uid]
+                color=g.colors.get(uid,"")
+                break
+
+        text+=f"{i}. {color} {name} — {wins} wins\n"
+
+    await update.message.reply_text(text)
+
 # ---------------- START ----------------
 
 async def start(update,context):
     if update.effective_chat.type=="private":
-        await update.message.reply_text("Use in group")
+        await update.message.reply_text("Use me in a group to play 🎲")
         return
 
     chat=update.effective_chat.id
@@ -89,9 +119,10 @@ async def button(update,context):
     if not g: return
 
     if q.data=="join":
+
         if user.id in g.players: return
         if len(g.players)>=4:
-            await q.answer("Max 4")
+            await q.answer("Max 4 players")
             return
 
         color=EMOJIS[len(g.players)]
@@ -112,11 +143,13 @@ async def button(update,context):
         )
 
     elif q.data=="begin":
+
         if len(g.players)<2:
-            await q.answer("Need 2+")
+            await q.answer("Need 2+ players")
             return
 
         g.started=True
+
         await q.edit_message_text(
             f"Game started!\n👉 {g.usernames[g.current()]}'s turn 🎲"
         )
@@ -125,6 +158,7 @@ async def button(update,context):
 
 async def handle_dice(update,context):
     m=update.message
+
     if m.dice.emoji!="🎲": return
 
     chat=m.chat.id
@@ -145,12 +179,12 @@ async def roll(msg,g,player,dice):
     text=f"{g.colors[player]} {g.usernames[player]} rolled {dice}\n"
     move=dice
 
-    # Lucky event
-    if random.random()<0.3:
+    # chaos boost chance
+    if random.random()<0.25:
         move+=2
-        text+="🍀 +2 boost!\n"
+        text+="🍀 Lucky +2 boost!\n"
 
-    # Enter board
+    # enter board
     if pos==-1:
         if dice==6:
             pos=0
@@ -162,19 +196,19 @@ async def roll(msg,g,player,dice):
             return
     else:
         if pos+move>TRACK_LENGTH:
-            text+="❗ Need exact roll\n"
+            text+="❗ Need exact roll to win\n"
             await msg.reply_text(text)
             g.next()
             return
         pos+=move
 
-    # Kill
+    # kill logic
     for p in g.players:
         if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
             g.positions[p]=-1
             text+=f"💥 Killed {g.usernames[p]}\n"
 
-    # Win
+    # win
     if pos==TRACK_LENGTH:
         leaderboard[player]=leaderboard.get(player,0)+1
         await msg.reply_text(
@@ -200,8 +234,9 @@ async def roll(msg,g,player,dice):
 app=ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start",start))
+app.add_handler(CommandHandler("stats",stats))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Running colored Ludo...")
+print("Ludo running with stats...")
 app.run_polling()
