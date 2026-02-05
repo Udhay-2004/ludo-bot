@@ -26,28 +26,37 @@ class LudoGame:
         self.positions={}
         self.turn=0
         self.started=False
+        self.usernames={}
+        self.colors={}
 
     def current(self): return self.players[self.turn]
     def next(self): self.turn=(self.turn+1)%len(self.players)
+
+# ---------------- TAG HELPER ----------------
+
+def tag(user):
+    if user.username:
+        return "@"+user.username
+    return user.first_name
 
 # ---------------- BUILD TRACK ----------------
 
 def build_track(g):
     t=["⬜"]*TRACK_LENGTH
 
-    for i,(p,pos) in enumerate(g.positions.items()):
+    for p,pos in g.positions.items():
         if 0<=pos<TRACK_LENGTH:
-            t[pos]=EMOJIS[i]
+            t[pos]=g.colors[p]
 
     for s in SAFE_TILES:
         if t[s]=="⬜": t[s]="⭐"
 
-    line1="".join(t[:10])
-    line2="".join(t[10:20])
-    line3="".join(t[20:30])
-    line4="".join(t[30:40])
+    l1="".join(t[:10])
+    l2="".join(t[10:20])
+    l3="".join(t[20:30])
+    l4="".join(t[30:40])
 
-    return f"🏁{line1}\n{line2}\n{line3}\n{line4}🏆"
+    return f"🏁{l1}\n{l2}\n{l3}\n{l4}🏆"
 
 # ---------------- START ----------------
 
@@ -63,7 +72,7 @@ async def start(update,context):
         [InlineKeyboardButton("Start",callback_data="begin")]]
 
     await update.message.reply_text(
-        "🎲 Chaos Ludo 4-Line Mode",
+        "🎲 Ludo Lobby",
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
@@ -74,22 +83,31 @@ async def button(update,context):
     await q.answer()
 
     chat=q.message.chat.id
-    user=q.from_user.first_name
+    user=q.from_user
     g=games.get(chat)
 
     if not g: return
 
     if q.data=="join":
-        if user in g.players: return
+        if user.id in g.players: return
         if len(g.players)>=4:
             await q.answer("Max 4")
             return
 
-        g.players.append(user)
-        g.positions[user]=-1
+        color=EMOJIS[len(g.players)]
+
+        g.players.append(user.id)
+        g.positions[user.id]=-1
+        g.usernames[user.id]=tag(user)
+        g.colors[user.id]=color
+
+        plist="\n".join(
+            f"{g.colors[p]} {g.usernames[p]}"
+            for p in g.players
+        )
 
         await q.edit_message_text(
-            "Players:\n"+"\n".join(g.players),
+            "Players:\n"+plist,
             reply_markup=q.message.reply_markup
         )
 
@@ -100,7 +118,7 @@ async def button(update,context):
 
         g.started=True
         await q.edit_message_text(
-            f"Game started!\n{g.current()} turn 🎲"
+            f"Game started!\n👉 {g.usernames[g.current()]}'s turn 🎲"
         )
 
 # ---------------- DICE ----------------
@@ -110,13 +128,13 @@ async def handle_dice(update,context):
     if m.dice.emoji!="🎲": return
 
     chat=m.chat.id
-    user=update.effective_user.first_name
+    user=update.effective_user
     g=games.get(chat)
 
     if not g or not g.started: return
-    if user!=g.current(): return
+    if user.id!=g.current(): return
 
-    await roll(m,g,user,m.dice.value)
+    await roll(m,g,user.id,m.dice.value)
 
 # ---------------- ROLL ----------------
 
@@ -124,17 +142,13 @@ async def roll(msg,g,player,dice):
     chat=msg.chat.id
     pos=g.positions[player]
 
-    text=f"🎲 {player} rolled {dice}\n"
+    text=f"{g.colors[player]} {g.usernames[player]} rolled {dice}\n"
     move=dice
 
-    # Lucky events
-    ev=random.choice(["none","boost","back"])
-    if ev=="boost":
+    # Lucky event
+    if random.random()<0.3:
         move+=2
         text+="🍀 +2 boost!\n"
-    elif ev=="back":
-        move=max(1,move-2)
-        text+="😈 -2 bad luck!\n"
 
     # Enter board
     if pos==-1:
@@ -147,36 +161,25 @@ async def roll(msg,g,player,dice):
             g.next()
             return
     else:
-        # EXACT FINISH RULE
         if pos+move>TRACK_LENGTH:
-            text+="❗ Need exact roll to win\n"
+            text+="❗ Need exact roll\n"
             await msg.reply_text(text)
             g.next()
             return
         pos+=move
 
-    # Power tiles
-    if pos in POWER_TILES:
-        if POWER_TILES[pos]=="boost":
-            pos+=3
-            text+="🚀 Power +3!\n"
-        elif POWER_TILES[pos]=="bomb":
-            victim=random.choice(
-                [p for p in g.players if p!=player]
-            )
-            g.positions[victim]=-1
-            text+=f"💣 Bomb! {victim} home!\n"
-
     # Kill
     for p in g.players:
         if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
             g.positions[p]=-1
-            text+=f"💥 Killed {p}\n"
+            text+=f"💥 Killed {g.usernames[p]}\n"
 
     # Win
     if pos==TRACK_LENGTH:
         leaderboard[player]=leaderboard.get(player,0)+1
-        await msg.reply_text(f"🏆 {player} WINS!")
+        await msg.reply_text(
+            f"🏆 {g.colors[player]} {g.usernames[player]} WINS!"
+        )
         del games[chat]
         return
 
@@ -189,7 +192,7 @@ async def roll(msg,g,player,dice):
 
     await msg.reply_text(
         text+"\n"+track+
-        f"\n👉 Next: {g.current()}"
+        f"\n👉 {g.usernames[g.current()]}'s turn"
     )
 
 # ---------------- RUN ----------------
@@ -200,5 +203,5 @@ app.add_handler(CommandHandler("start",start))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Running 4-line Chaos Ludo...")
+print("Running colored Ludo...")
 app.run_polling()
