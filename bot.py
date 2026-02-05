@@ -1,5 +1,4 @@
 import os
-import random
 from telegram import (
     Update, InlineKeyboardButton,
     InlineKeyboardMarkup
@@ -33,14 +32,9 @@ class LudoGame:
         self.started=False
         self.names={}
         self.colors={}
-        self.skips={}
-        self.timeout_job=None
 
-    def current(self):
-        return self.players[self.turn]
-
-    def next(self):
-        self.turn=(self.turn+1)%len(self.players)
+    def current(self): return self.players[self.turn]
+    def next(self): self.turn=(self.turn+1)%len(self.players)
 
 # ---------------- NAME ----------------
 
@@ -69,67 +63,7 @@ def build_track(g):
         "".join(t[30:40])+"🏆"
     )
 
-# ---------------- TURN TIMER ----------------
-
-async def turn_timeout(context:ContextTypes.DEFAULT_TYPE):
-
-    chat=context.job.chat_id
-    g=games.get(chat)
-
-    if not g or not g.started:
-        return
-
-    player=g.current()
-
-    g.skips[player]=g.skips.get(player,0)+1
-
-    msg=f"⏰ {g.names[player]} skipped (no roll)"
-
-    # remove if 3 skips
-    if g.skips[player]>=3:
-        msg+=f"\n❌ Removed from game"
-        g.players.remove(player)
-        del g.positions[player]
-        del g.names[player]
-        del g.colors[player]
-
-        if len(g.players)<2:
-            await context.bot.send_message(chat,"Game ended (not enough players)")
-            del games[chat]
-            return
-
-        g.turn%=len(g.players)
-
-    else:
-        g.next()
-
-    await context.bot.send_message(chat,msg)
-    await show_turn(context.bot,chat,g)
-
-def start_timer(context,chat,g):
-    if g.timeout_job:
-        g.timeout_job.schedule_removal()
-
-    g.timeout_job=context.job_queue.run_once(
-        turn_timeout,30,chat_id=chat
-    )
-
-# ---------------- SHOW TURN ----------------
-
-async def show_turn(bot,chat,g):
-
-    await bot.send_message(
-        chat,
-        "🎯 Preparing turn..."
-    )
-
-    await bot.send_message(
-        chat,
-        build_track(g)+
-        f"\n👉 {g.names[g.current()]}'s turn 🎲\nSend 🎲 to roll!"
-    )
-
-# ---------------- STATS ----------------
+# ---------------- LEADERBOARD ----------------
 
 def get_name(uid):
     for g in games.values():
@@ -138,7 +72,6 @@ def get_name(uid):
     return "Player"
 
 def lb_text(mode):
-
     data=leaderboard[mode]
 
     title={
@@ -151,12 +84,13 @@ def lb_text(mode):
         return title[mode]+"No stats yet."
 
     medals=["🥇","🥈","🥉"]
-
     text=title[mode]
 
-    sorted_lb=sorted(data.items(),
-                     key=lambda x:x[1],
-                     reverse=True)[:10]
+    sorted_lb=sorted(
+        data.items(),
+        key=lambda x:x[1],
+        reverse=True
+    )[:10]
 
     for i,(uid,w) in enumerate(sorted_lb):
         medal=medals[i] if i<3 else "🏅"
@@ -167,7 +101,7 @@ def lb_text(mode):
 async def stats(update,context):
 
     kb=[[
-        InlineKeyboardButton("Today ✅",callback_data="lb_today"),
+        InlineKeyboardButton("Today",callback_data="lb_today"),
         InlineKeyboardButton("Week",callback_data="lb_week"),
         InlineKeyboardButton("All Time",callback_data="lb_all")
     ]]
@@ -178,15 +112,10 @@ async def stats(update,context):
     )
 
 async def lb_buttons(update,context):
-
     q=update.callback_query
     await q.answer()
-
     mode=q.data.split("_")[1]
-
-    await q.edit_message_text(
-        lb_text(mode)
-    )
+    await q.edit_message_text(lb_text(mode))
 
 # ---------------- START ----------------
 
@@ -249,8 +178,11 @@ async def button(update,context):
             return
 
         g.started=True
-        await show_turn(context.bot,chat,g)
-        start_timer(context,chat,g)
+
+        await q.edit_message_text(
+            build_track(g)+
+            f"\n👉 {g.names[g.current()]}'s turn 🎲\nSend 🎲"
+        )
 
 # ---------------- DICE ----------------
 
@@ -266,14 +198,11 @@ async def handle_dice(update,context):
     if not g or not g.started: return
     if user.id!=g.current(): return
 
-    if g.timeout_job:
-        g.timeout_job.schedule_removal()
-
-    await roll(msg,g,user.id,msg.dice.value,context)
+    await roll(msg,g,user.id,msg.dice.value)
 
 # ---------------- ROLL ----------------
 
-async def roll(msg,g,player,dice,context):
+async def roll(msg,g,player,dice):
 
     chat=msg.chat.id
     pos=g.positions[player]
@@ -288,17 +217,22 @@ async def roll(msg,g,player,dice,context):
             text+="Need 6\n"
             g.next()
             await msg.reply_text(text)
-            await show_turn(context.bot,chat,g)
-            start_timer(context,chat,g)
+            await msg.reply_text(
+                build_track(g)+
+                f"\n👉 {g.names[g.current()]}'s turn 🎲"
+            )
             return
     else:
         if pos+dice>TRACK_LENGTH:
             text+="Need exact roll\n"
             g.next()
             await msg.reply_text(text)
-            await show_turn(context.bot,chat,g)
-            start_timer(context,chat,g)
+            await msg.reply_text(
+                build_track(g)+
+                f"\n👉 {g.names[g.current()]}'s turn 🎲"
+            )
             return
+
         pos+=dice
 
     for p in g.players:
@@ -320,8 +254,10 @@ async def roll(msg,g,player,dice,context):
         g.next()
 
     await msg.reply_text(text)
-    await show_turn(context.bot,chat,g)
-    start_timer(context,chat,g)
+    await msg.reply_text(
+        build_track(g)+
+        f"\n👉 {g.names[g.current()]}'s turn 🎲"
+    )
 
 # ---------------- RUN ----------------
 
@@ -333,5 +269,5 @@ app.add_handler(CallbackQueryHandler(button,pattern="^(join|begin)$"))
 app.add_handler(CallbackQueryHandler(lb_buttons,pattern="^lb_"))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Pro Ludo running...")
+print("Ludo running clean...")
 app.run_polling()
