@@ -28,16 +28,12 @@ class LudoGame:
         self.started=False
         self.names={}
         self.colors={}
-        self.finished=[]
 
     def current(self):
-        if not self.players:
-            return None
         return self.players[self.turn]
 
     def next(self):
-        if self.players:
-            self.turn=(self.turn+1)%len(self.players)
+        self.turn=(self.turn+1)%len(self.players)
 
 # ---------------- NAME ----------------
 
@@ -96,32 +92,23 @@ async def start(update,context):
     chat=update.effective_chat.id
     games[chat]=LudoGame()
 
-    kb=[[InlineKeyboardButton("Join",callback_data="join_btn")],
-        [InlineKeyboardButton("Start",callback_data="begin")]]
+    kb=[[InlineKeyboardButton("🎮 Join",callback_data="join_btn")],
+        [InlineKeyboardButton("🚀 Start",callback_data="start_game")]]
 
     await update.message.reply_text(
-        "🎲 Ludo Lobby\nUse /join to enter",
+        "🎲 Ludo Lobby\nClick Join or /join",
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-# ---------------- JOIN CMD ----------------
+# ---------------- JOIN LOGIC ----------------
 
-async def join_cmd(update,context):
-
-    chat=update.effective_chat.id
-    user=update.effective_user
-    g=games.get(chat)
-
-    if not g:
-        await update.message.reply_text("Start game first /start")
-        return
+def add_player(g,user):
 
     if user.id in g.players:
-        return
+        return "already"
 
     if len(g.players)>=4:
-        await update.message.reply_text("Game full")
-        return
+        return "full"
 
     color=EMOJIS[len(g.players)]
 
@@ -130,9 +117,31 @@ async def join_cmd(update,context):
     g.names[user.id]=name_of(user)
     g.colors[user.id]=color
 
-    await update.message.reply_text(
-        f"{color} {g.names[user.id]} joined!"
-    )
+    return "ok"
+
+# ---------------- JOIN CMD ----------------
+
+async def join_cmd(update,context):
+
+    chat=update.effective_chat.id
+    user=update.effective_user
+
+    g=games.get(chat)
+
+    if not g:
+        await update.message.reply_text("Use /start first")
+        return
+
+    r=add_player(g,user)
+
+    if r=="already":
+        await update.message.reply_text("You already joined.")
+    elif r=="full":
+        await update.message.reply_text("Game full (4 players).")
+    else:
+        await update.message.reply_text(
+            f"{g.colors[user.id]} {g.names[user.id]} joined!"
+        )
 
 # ---------------- LEAVE ----------------
 
@@ -143,14 +152,19 @@ async def leave_cmd(update,context):
     g=games.get(chat)
 
     if not g or user.id not in g.players:
+        await update.message.reply_text("You are not in game.")
         return
 
     name=g.names[user.id]
+    idx=g.players.index(user.id)
 
     g.players.remove(user.id)
     g.positions.pop(user.id,None)
     g.names.pop(user.id,None)
     g.colors.pop(user.id,None)
+
+    if idx<g.turn:
+        g.turn-=1
 
     if len(g.players)<2:
         await update.message.reply_text("Game ended.")
@@ -159,7 +173,7 @@ async def leave_cmd(update,context):
 
     await update.message.reply_text(f"{name} left.")
 
-# ---------------- BUTTON ----------------
+# ---------------- BUTTONS ----------------
 
 async def button(update,context):
 
@@ -172,22 +186,35 @@ async def button(update,context):
 
     if not g: return
 
+# JOIN BUTTON
     if q.data=="join_btn":
-        await join_cmd(update,context)
 
-    elif q.data=="begin":
+        r=add_player(g,user)
+
+        if r=="already":
+            await q.answer("Already joined")
+        elif r=="full":
+            await q.answer("Game full")
+        else:
+            await q.message.reply_text(
+                f"{g.colors[user.id]} {g.names[user.id]} joined!"
+            )
+
+# START BUTTON
+    elif q.data=="start_game":
 
         if len(g.players)<2:
-            await q.answer("Need 2+")
+            await q.answer("Need 2+ players")
             return
 
         g.started=True
 
-        await q.edit_message_text(
+        await q.message.reply_text(
             build_track(g)+
             f"\n👉 {g.names[g.current()]}'s turn 🎲"
         )
 
+# KICK BUTTON
     elif q.data.startswith("kick_"):
 
         uid=int(q.data.split("_")[1])
@@ -309,5 +336,5 @@ app.add_handler(CommandHandler("stats",stats))
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo running full...")
+print("Ludo running perfect...")
 app.run_polling()
