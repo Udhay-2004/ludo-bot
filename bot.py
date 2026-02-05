@@ -12,11 +12,7 @@ from telegram.ext import (
 TOKEN=os.getenv("TOKEN")
 
 games={}
-leaderboard={
-    "today":{},
-    "week":{},
-    "all":{}
-}
+leaderboard={}
 
 TRACK_LENGTH=40
 SAFE_TILES={5,10,15,20,25,30,35}
@@ -32,9 +28,16 @@ class LudoGame:
         self.started=False
         self.names={}
         self.colors={}
+        self.finished=[]
 
-    def current(self): return self.players[self.turn]
-    def next(self): self.turn=(self.turn+1)%len(self.players)
+    def current(self):
+        if not self.players:
+            return None
+        return self.players[self.turn]
+
+    def next(self):
+        if self.players:
+            self.turn=(self.turn+1)%len(self.players)
 
 # ---------------- NAME ----------------
 
@@ -63,59 +66,26 @@ def build_track(g):
         "".join(t[30:40])+"🏆"
     )
 
-# ---------------- LEADERBOARD ----------------
-
-def get_name(uid):
-    for g in games.values():
-        if uid in g.names:
-            return g.names[uid]
-    return "Player"
-
-def lb_text(mode):
-    data=leaderboard[mode]
-
-    title={
-        "today":"🏆 Leaderboard - Today\n\n",
-        "week":"🏆 Leaderboard - Week\n\n",
-        "all":"🏆 Leaderboard - All Time\n\n"
-    }
-
-    if not data:
-        return title[mode]+"No stats yet."
-
-    medals=["🥇","🥈","🥉"]
-    text=title[mode]
-
-    sorted_lb=sorted(
-        data.items(),
-        key=lambda x:x[1],
-        reverse=True
-    )[:10]
-
-    for i,(uid,w) in enumerate(sorted_lb):
-        medal=medals[i] if i<3 else "🏅"
-        text+=f"{medal} {get_name(uid)} - {w}\n"
-
-    return text
+# ---------------- STATS ----------------
 
 async def stats(update,context):
 
-    kb=[[
-        InlineKeyboardButton("Today",callback_data="lb_today"),
-        InlineKeyboardButton("Week",callback_data="lb_week"),
-        InlineKeyboardButton("All Time",callback_data="lb_all")
-    ]]
+    if not leaderboard:
+        await update.message.reply_text("No stats yet.")
+        return
 
-    await update.message.reply_text(
-        lb_text("today"),
-        reply_markup=InlineKeyboardMarkup(kb)
+    text="🏆 Leaderboard\n\n"
+
+    sorted_lb=sorted(
+        leaderboard.items(),
+        key=lambda x:x[1],
+        reverse=True
     )
 
-async def lb_buttons(update,context):
-    q=update.callback_query
-    await q.answer()
-    mode=q.data.split("_")[1]
-    await q.edit_message_text(lb_text(mode))
+    for i,(name,wins) in enumerate(sorted_lb,1):
+        text+=f"{i}. {name} - {wins} wins\n"
+
+    await update.message.reply_text(text)
 
 # ---------------- START ----------------
 
@@ -149,11 +119,14 @@ async def button(update,context):
 
     if not g: return
 
+# JOIN (mid-game allowed)
     if q.data=="join":
 
-        if user.id in g.players: return
+        if user.id in g.players:
+            return
+
         if len(g.players)>=4:
-            await q.answer("Max 4")
+            await q.answer("Max 4 players")
             return
 
         color=EMOJIS[len(g.players)]
@@ -163,14 +136,17 @@ async def button(update,context):
         g.names[user.id]=name_of(user)
         g.colors[user.id]=color
 
+        plist="\n".join(
+            f"{g.colors[p]} {g.names[p]}"
+            for p in g.players
+        )
+
         await q.edit_message_text(
-            "Players:\n"+"\n".join(
-                f"{g.colors[p]} {g.names[p]}"
-                for p in g.players
-            ),
+            "Players:\n"+plist,
             reply_markup=q.message.reply_markup
         )
 
+# START
     elif q.data=="begin":
 
         if len(g.players)<2:
@@ -181,7 +157,7 @@ async def button(update,context):
 
         await q.edit_message_text(
             build_track(g)+
-            f"\n👉 {g.names[g.current()]}'s turn 🎲\nSend 🎲"
+            f"\n👉 {g.names[g.current()]}'s turn 🎲"
         )
 
 # ---------------- DICE ----------------
@@ -232,20 +208,37 @@ async def roll(msg,g,player,dice):
                 f"\n👉 {g.names[g.current()]}'s turn 🎲"
             )
             return
-
         pos+=dice
 
+    # Kill
     for p in g.players:
         if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
             g.positions[p]=-1
             text+=f"💥 Killed {g.names[p]}\n"
 
+# FINISH
     if pos==TRACK_LENGTH:
-        for k in leaderboard:
-            leaderboard[k][player]=leaderboard[k].get(player,0)+1
 
-        await msg.reply_text(f"🏆 {g.names[player]} WINS!")
-        del games[chat]
+        g.finished.append(player)
+        name=g.names[player]
+
+        leaderboard[name]=leaderboard.get(name,0)+1
+
+        await msg.reply_text(f"🥇 {name} finished!")
+
+        g.players.remove(player)
+        del g.positions[player]
+
+        if len(g.players)<=1:
+            await msg.reply_text("🏁 Game Over!")
+            del games[chat]
+            return
+
+        g.turn%=len(g.players)
+        await msg.reply_text(
+            build_track(g)+
+            f"\n👉 {g.names[g.current()]}'s turn 🎲"
+        )
         return
 
     g.positions[player]=pos
@@ -265,9 +258,9 @@ app=ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start",start))
 app.add_handler(CommandHandler("stats",stats))
-app.add_handler(CallbackQueryHandler(button,pattern="^(join|begin)$"))
-app.add_handler(CallbackQueryHandler(lb_buttons,pattern="^lb_"))
+app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo running clean...")
+print("Ludo running updated...")
 app.run_polling()
+
