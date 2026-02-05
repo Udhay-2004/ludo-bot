@@ -1,46 +1,20 @@
 import os
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
     CallbackQueryHandler, ContextTypes,
     MessageHandler, filters
 )
 
-from PIL import Image, ImageDraw
-
 TOKEN = os.getenv("TOKEN")
 
 games = {}
 leaderboard = {}
 
-# ---------------- TILE MAP ----------------
-# 52 tile loop (simple square path)
-tiles = {i:(50+(i%13)*40,550-(i//13)*40) for i in range(52)}
+TRACK_LENGTH = 20
+SAFE_TILES = {5,10,15}
 
-safe_zones = {0,8,13,21,26,34,39,47}
-
-# ---------------- DRAW BOARD ----------------
-
-def draw_board(positions):
-    board = Image.open("board.png").convert("RGBA")
-    draw = ImageDraw.Draw(board)
-
-    colors=["red","blue","green","yellow"]
-
-    for i,(player,pos) in enumerate(positions.items()):
-        if pos>=0 and pos in tiles:
-            x,y=tiles[pos]
-            draw.ellipse(
-                (x-15,y-15,x+15,y+15),
-                fill=colors[i%4],
-                outline="black",
-                width=3
-            )
-
-    board.save("current.png")
-
+EMOJIS = ["🟥","🟦","🟩","🟨"]
 
 # ---------------- GAME CLASS ----------------
 
@@ -48,28 +22,42 @@ class LudoGame:
     def __init__(self):
         self.players=[]
         self.positions={}
-        self.turn_index=0
+        self.turn=0
         self.started=False
 
-    def current_player(self):
-        return self.players[self.turn_index]
+    def current(self):
+        return self.players[self.turn]
 
-    def next_turn(self):
-        self.turn_index=(self.turn_index+1)%len(self.players)
+    def next(self):
+        self.turn=(self.turn+1)%len(self.players)
 
+# ---------------- BUILD TRACK ----------------
+
+def build_track(game):
+    track=["⬜"]*TRACK_LENGTH
+
+    for i,(p,pos) in enumerate(game.positions.items()):
+        if 0<=pos<TRACK_LENGTH:
+            track[pos]=EMOJIS[i]
+
+    for s in SAFE_TILES:
+        if track[s]=="⬜":
+            track[s]="⭐"
+
+    return "🏁"+"".join(track)+"🏆"
 
 # ---------------- HELP ----------------
 
 async def help_cmd(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "/start - lobby\n/help - help\n/rules - rules\n/stats - leaderboard"
+        "/start lobby\n/help help\n/rules rules\n/stats leaderboard"
     )
 
 # ---------------- RULES ----------------
 
 async def rules(update:Update,context:ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Roll 6 to enter.\nSafe tiles ⭐ can't be killed.\nReach 52 to win."
+        "Roll 🎲\nLand on player to kill\n⭐ = safe tiles\nReach 🏆 to win"
     )
 
 # ---------------- STATS ----------------
@@ -85,22 +73,19 @@ async def stats(update:Update,context:ContextTypes.DEFAULT_TYPE):
         key=lambda x:x[1],
         reverse=True
     ),1):
-        text+=f"{i}. {p} - {w} wins\n"
+        text+=f"{i}. {p} - {w}\n"
 
     await update.message.reply_text(text)
-
 
 # ---------------- START ----------------
 
 async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type=="private":
-        await update.message.reply_text(
-            "Use me in a group to play 🎲"
-        )
+        await update.message.reply_text("Use in group only")
         return
 
-    chat_id=update.effective_chat.id
-    games[chat_id]=LudoGame()
+    chat=update.effective_chat.id
+    games[chat]=LudoGame()
 
     kb=[[InlineKeyboardButton("Join",callback_data="join")],
         [InlineKeyboardButton("Start",callback_data="begin")]]
@@ -110,103 +95,97 @@ async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-
 # ---------------- BUTTONS ----------------
 
 async def button(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    query=update.callback_query
-    await query.answer()
+    q=update.callback_query
+    await q.answer()
 
-    chat_id=query.message.chat.id
-    user=query.from_user.first_name
-    game=games.get(chat_id)
+    chat=q.message.chat.id
+    user=q.from_user.first_name
+    g=games.get(chat)
 
-    if not game: return
+    if not g: return
 
-    if query.data=="join":
-        if user in game.players: return
-        if len(game.players)>=4:
-            await query.answer("Max 4 players")
+    if q.data=="join":
+        if user in g.players: return
+        if len(g.players)>=4:
+            await q.answer("Max 4")
             return
 
-        game.players.append(user)
-        game.positions[user]=-1
+        g.players.append(user)
+        g.positions[user]=-1
 
-        await query.edit_message_text(
-            "Players:\n"+"\n".join(game.players),
-            reply_markup=query.message.reply_markup
+        await q.edit_message_text(
+            "Players:\n"+"\n".join(g.players),
+            reply_markup=q.message.reply_markup
         )
 
-    elif query.data=="begin":
-        if len(game.players)<2:
-            await query.answer("Need 2 players")
+    elif q.data=="begin":
+        if len(g.players)<2:
+            await q.answer("Need 2+")
             return
 
-        game.started=True
-        await query.edit_message_text(
-            f"Game started!\n{game.current_player()} turn\nSend 🎲"
+        g.started=True
+        await q.edit_message_text(
+            f"Game started!\n{g.current()} turn\nSend 🎲"
         )
-
 
 # ---------------- DICE ----------------
 
 async def handle_dice(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    msg=update.message
-    if msg.dice.emoji!="🎲": return
+    m=update.message
+    if m.dice.emoji!="🎲": return
 
-    chat_id=msg.chat.id
+    chat=m.chat.id
     user=update.effective_user.first_name
-    game=games.get(chat_id)
+    g=games.get(chat)
 
-    if not game or not game.started: return
-    if user!=game.current_player(): return
+    if not g or not g.started: return
+    if user!=g.current(): return
 
-    await process_roll(msg,game,user,msg.dice.value)
-
+    await roll(m,g,user,m.dice.value)
 
 # ---------------- ROLL ----------------
 
-async def process_roll(message,game,player,dice):
-    chat_id=message.chat.id
-    pos=game.positions[player]
+async def roll(msg,g,player,dice):
+    chat=msg.chat.id
+    pos=g.positions[player]
 
     text=f"{player} rolled {dice}\n"
 
     if pos==-1:
         if dice==6:
             pos=0
-            text+="Entered board\n"
+            text+="Entered!\n"
         else:
             text+="Need 6\n"
     else:
         pos+=dice
 
-    # Kill logic
-    for p in game.players:
-        if p!=player and game.positions[p]==pos and pos not in safe_zones:
-            game.positions[p]=-1
+    # Kill
+    for p in g.players:
+        if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
+            g.positions[p]=-1
             text+=f"Killed {p}\n"
 
-    # Win
-    if pos>=52:
+    if pos>=TRACK_LENGTH:
         leaderboard[player]=leaderboard.get(player,0)+1
-        await message.reply_text(f"🏆 {player} wins!")
-        del games[chat_id]
+        await msg.reply_text(f"🏆 {player} wins!")
+        del games[chat]
         return
 
-    game.positions[player]=pos
+    g.positions[player]=pos
 
-    # Draw board
-    draw_board(game.positions)
-    await message.reply_photo(open("current.png","rb"))
+    track=build_track(g)
 
     if dice!=6:
-        game.next_turn()
+        g.next()
 
-    await message.reply_text(
-        f"Next: {game.current_player()}"
+    await msg.reply_text(
+        text+"\n"+track+
+        f"\nNext: {g.current()}"
     )
-
 
 # ---------------- RUN ----------------
 
