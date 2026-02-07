@@ -16,7 +16,7 @@ TRACK_LENGTH=52
 SAFE_TILES={0,8,13,21,26,34,39,47}
 EMOJIS=["🟥","🟦","🟩","🟨"]
 
-# ---------------- GAME ----------------
+# -------- GAME --------
 
 class LudoGame:
     def __init__(self,creator):
@@ -35,18 +35,33 @@ class LudoGame:
         self.turn=(self.turn+1)%len(self.players)
 
 def fix_turn(g):
-    if g.turn>=len(g.players):
+    if g.players and g.turn>=len(g.players):
         g.turn=0
 
-# ---------------- HELPERS ----------------
+# -------- HELPERS --------
 
 def valid_cmd(update,cmd):
-    return update.message and update.message.text==f"/{cmd}@{BOT_USERNAME}"
+    if not update.message or not update.message.text:
+        return False
+
+    text=update.message.text.strip()
+
+    if update.effective_chat.type=="private":
+        return "pm"
+
+    if text.startswith(f"/{cmd}@{BOT_USERNAME}"):
+        return True
+
+    return False
 
 def name_of(u):
     return f"{u.first_name} (@{u.username})" if u.username else u.first_name
 
-# ---------------- TRACK ----------------
+async def is_admin(update,uid):
+    m=await update.effective_chat.get_member(uid)
+    return m.status in ["administrator","creator"]
+
+# -------- TRACK --------
 
 def build_track(g):
     t=["⬜"]*TRACK_LENGTH
@@ -66,16 +81,14 @@ def build_track(g):
         "".join(t[39:52])+"🏆"
     )
 
-# ---------------- ADMIN CHECK ----------------
-
-async def is_admin(update,uid):
-    m=await update.effective_chat.get_member(uid)
-    return m.status in ["administrator","creator"]
-
-# ---------------- START ----------------
+# -------- COMMANDS --------
 
 async def start(update,context):
-    if not valid_cmd(update,"start"): return
+    v=valid_cmd(update,"start")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     chat=update.effective_chat.id
     games[chat]=LudoGame(update.effective_user.id)
@@ -88,10 +101,12 @@ async def start(update,context):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-# ---------------- JOIN ----------------
-
 async def join_cmd(update,context):
-    if not valid_cmd(update,"join"): return
+    v=valid_cmd(update,"join")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     chat=update.effective_chat.id
     u=update.effective_user
@@ -108,10 +123,12 @@ async def join_cmd(update,context):
 
     await update.message.reply_text(f"{c} {g.names[u.id]} joined!")
 
-# ---------------- LEAVE ----------------
-
 async def leave_cmd(update,context):
-    if not valid_cmd(update,"leave"): return
+    v=valid_cmd(update,"leave")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     chat=update.effective_chat.id
     u=update.effective_user
@@ -130,13 +147,14 @@ async def leave_cmd(update,context):
         g.turn-=1
 
     fix_turn(g)
-
     await update.message.reply_text("Left game.")
 
-# ---------------- KICK ----------------
-
 async def kick_cmd(update,context):
-    if not valid_cmd(update,"kick"): return
+    v=valid_cmd(update,"kick")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     chat=update.effective_chat.id
     u=update.effective_user
@@ -148,15 +166,8 @@ async def kick_cmd(update,context):
         return
 
     target=None
-
     if update.message.reply_to_message:
         target=update.message.reply_to_message.from_user.id
-    elif context.args:
-        uname=context.args[0].replace("@","")
-        for uid,name in g.names.items():
-            if uname in name:
-                target=uid
-                break
 
     if target not in g.players: return
 
@@ -171,13 +182,14 @@ async def kick_cmd(update,context):
         g.turn-=1
 
     fix_turn(g)
-
     await update.message.reply_text("Player kicked.")
 
-# ---------------- KILL GAME ----------------
-
 async def kill_cmd(update,context):
-    if not valid_cmd(update,"kill"): return
+    v=valid_cmd(update,"kill")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     chat=update.effective_chat.id
     u=update.effective_user
@@ -188,10 +200,12 @@ async def kill_cmd(update,context):
     games.pop(chat,None)
     await update.message.reply_text("Game killed.")
 
-# ---------------- RELOAD ----------------
-
 async def reload_cmd(update,context):
-    if not valid_cmd(update,"reload"): return
+    v=valid_cmd(update,"reload")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     u=update.effective_user
 
@@ -201,10 +215,12 @@ async def reload_cmd(update,context):
     games.clear()
     await update.message.reply_text("✅ Reloaded.")
 
-# ---------------- STATS ----------------
-
 async def stats(update,context):
-    if not valid_cmd(update,"stats"): return
+    v=valid_cmd(update,"stats")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
 
     if not leaderboard:
         await update.message.reply_text("No stats yet.")
@@ -216,7 +232,7 @@ async def stats(update,context):
 
     await update.message.reply_text(text)
 
-# ---------------- BUTTONS ----------------
+# -------- BUTTONS --------
 
 async def button(update,context):
     q=update.callback_query
@@ -243,7 +259,7 @@ async def button(update,context):
             f"\n👉 {g.names[g.current()]}'s turn 🎲"
         )
 
-# ---------------- DICE ----------------
+# -------- DICE --------
 
 async def handle_dice(update,context):
     msg=update.message
@@ -257,7 +273,7 @@ async def handle_dice(update,context):
 
     await roll(msg,g,u.id,msg.dice.value)
 
-# ---------------- ROLL ----------------
+# -------- ROLL --------
 
 async def roll(msg,g,p,dice):
     pos=g.positions[p]
@@ -280,7 +296,6 @@ async def roll(msg,g,p,dice):
     for o in g.players:
         if o!=p and g.positions[o]==pos and pos not in SAFE_TILES:
             g.positions[o]=-1
-            text+=f"💥 Killed {g.names[o]}\n"
 
     if pos==TRACK_LENGTH:
         name=g.names[p]
@@ -309,23 +324,19 @@ async def roll(msg,g,p,dice):
         f"\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
-# ---------------- RUN ----------------
+# -------- RUN --------
 
 app=ApplicationBuilder().token(TOKEN).build()
 
-for cmd,func in {
-    "start":start,
-    "join":join_cmd,
-    "leave":leave_cmd,
-    "kick":kick_cmd,
-    "kill":kill_cmd,
-    "reload":reload_cmd,
-    "stats":stats
+for c,f in {
+    "start":start,"join":join_cmd,"leave":leave_cmd,
+    "kick":kick_cmd,"kill":kill_cmd,
+    "reload":reload_cmd,"stats":stats
 }.items():
-    app.add_handler(CommandHandler(cmd,func))
+    app.add_handler(CommandHandler(c,f))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo Ultimate Running...")
+print("Ludo final fixed running...")
 app.run_polling()
