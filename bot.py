@@ -12,15 +12,8 @@ BOT_USERNAME="LudoooXBot"
 games={}
 leaderboard={}
 
-# --------- BOARD SETTINGS ---------
-
 TRACK_LENGTH=52
-
-# Diagonal safe stars
-SAFE_TILES={
-    0,8,13,21,26,34,39,47
-}
-
+SAFE_TILES={0,8,13,21,26,34,39,47}
 EMOJIS=["🟥","🟦","🟩","🟨"]
 
 # ---------------- GAME ----------------
@@ -41,22 +34,21 @@ class LudoGame:
     def next(self):
         self.turn=(self.turn+1)%len(self.players)
 
-# ---------------- HELPERS ----------------
-
-def valid_cmd(update,cmd):
-    return update.message and update.message.text.startswith(f"/{cmd}@{BOT_USERNAME}")
-
-def name_of(user):
-    return f"{user.first_name} (@{user.username})" if user.username else user.first_name
-
 def fix_turn(g):
     if g.turn>=len(g.players):
         g.turn=0
 
+# ---------------- HELPERS ----------------
+
+def valid_cmd(update,cmd):
+    return update.message and update.message.text==f"/{cmd}@{BOT_USERNAME}"
+
+def name_of(u):
+    return f"{u.first_name} (@{u.username})" if u.username else u.first_name
+
 # ---------------- TRACK ----------------
 
 def build_track(g):
-
     t=["⬜"]*TRACK_LENGTH
 
     for p,pos in g.positions.items():
@@ -64,10 +56,9 @@ def build_track(g):
             t[pos]=g.colors[p]
 
     for s in SAFE_TILES:
-        if s<TRACK_LENGTH and t[s]=="⬜":
+        if t[s]=="⬜":
             t[s]="⭐"
 
-    # 4-row board
     return (
         "🏁"+"".join(t[:13])+"\n"+
         "".join(t[13:26])+"\n"+
@@ -77,14 +68,13 @@ def build_track(g):
 
 # ---------------- ADMIN CHECK ----------------
 
-async def is_admin(update,user_id):
-    m=await update.effective_chat.get_member(user_id)
+async def is_admin(update,uid):
+    m=await update.effective_chat.get_member(uid)
     return m.status in ["administrator","creator"]
 
 # ---------------- START ----------------
 
 async def start(update,context):
-
     if not valid_cmd(update,"start"): return
 
     chat=update.effective_chat.id
@@ -101,93 +91,215 @@ async def start(update,context):
 # ---------------- JOIN ----------------
 
 async def join_cmd(update,context):
-
     if not valid_cmd(update,"join"): return
 
     chat=update.effective_chat.id
-    user=update.effective_user
+    u=update.effective_user
+    g=games.get(chat)
+
+    if not g or u.id in g.players or len(g.players)>=4:
+        return
+
+    c=EMOJIS[len(g.players)]
+    g.players.append(u.id)
+    g.positions[u.id]=-1
+    g.names[u.id]=name_of(u)
+    g.colors[u.id]=c
+
+    await update.message.reply_text(f"{c} {g.names[u.id]} joined!")
+
+# ---------------- LEAVE ----------------
+
+async def leave_cmd(update,context):
+    if not valid_cmd(update,"leave"): return
+
+    chat=update.effective_chat.id
+    u=update.effective_user
+    g=games.get(chat)
+
+    if not g or u.id not in g.players: return
+
+    idx=g.players.index(u.id)
+
+    g.players.remove(u.id)
+    g.positions.pop(u.id,None)
+    g.names.pop(u.id,None)
+    g.colors.pop(u.id,None)
+
+    if idx<=g.turn and g.turn>0:
+        g.turn-=1
+
+    fix_turn(g)
+
+    await update.message.reply_text("Left game.")
+
+# ---------------- KICK ----------------
+
+async def kick_cmd(update,context):
+    if not valid_cmd(update,"kick"): return
+
+    chat=update.effective_chat.id
+    u=update.effective_user
     g=games.get(chat)
 
     if not g: return
 
-    if user.id in g.players: return
-    if len(g.players)>=4: return
+    if not await is_admin(update,u.id) and u.id!=g.creator:
+        return
 
-    c=EMOJIS[len(g.players)]
-    g.players.append(user.id)
-    g.positions[user.id]=-1
-    g.names[user.id]=name_of(user)
-    g.colors[user.id]=c
+    target=None
 
-    await update.message.reply_text(f"{c} {g.names[user.id]} joined!")
+    if update.message.reply_to_message:
+        target=update.message.reply_to_message.from_user.id
+    elif context.args:
+        uname=context.args[0].replace("@","")
+        for uid,name in g.names.items():
+            if uname in name:
+                target=uid
+                break
+
+    if target not in g.players: return
+
+    idx=g.players.index(target)
+
+    g.players.remove(target)
+    g.positions.pop(target,None)
+    g.names.pop(target,None)
+    g.colors.pop(target,None)
+
+    if idx<=g.turn and g.turn>0:
+        g.turn-=1
+
+    fix_turn(g)
+
+    await update.message.reply_text("Player kicked.")
+
+# ---------------- KILL GAME ----------------
+
+async def kill_cmd(update,context):
+    if not valid_cmd(update,"kill"): return
+
+    chat=update.effective_chat.id
+    u=update.effective_user
+
+    if not await is_admin(update,u.id):
+        return
+
+    games.pop(chat,None)
+    await update.message.reply_text("Game killed.")
+
+# ---------------- RELOAD ----------------
+
+async def reload_cmd(update,context):
+    if not valid_cmd(update,"reload"): return
+
+    u=update.effective_user
+
+    if not await is_admin(update,u.id):
+        return
+
+    games.clear()
+    await update.message.reply_text("✅ Reloaded.")
+
+# ---------------- STATS ----------------
+
+async def stats(update,context):
+    if not valid_cmd(update,"stats"): return
+
+    if not leaderboard:
+        await update.message.reply_text("No stats yet.")
+        return
+
+    text="🏆 Leaderboard\n\n"
+    for n,w in sorted(leaderboard.items(),key=lambda x:x[1],reverse=True):
+        text+=f"{n} — {w}\n"
+
+    await update.message.reply_text(text)
+
+# ---------------- BUTTONS ----------------
+
+async def button(update,context):
+    q=update.callback_query
+    await q.answer()
+
+    chat=q.message.chat.id
+    u=q.from_user
+    g=games.get(chat)
+
+    if not g: return
+
+    if q.data=="join_btn" and u.id not in g.players and len(g.players)<4:
+        c=EMOJIS[len(g.players)]
+        g.players.append(u.id)
+        g.positions[u.id]=-1
+        g.names[u.id]=name_of(u)
+        g.colors[u.id]=c
+        await q.message.reply_text(f"{c} {g.names[u.id]} joined!")
+
+    elif q.data=="start_game" and len(g.players)>=2:
+        g.started=True
+        await q.message.reply_text(
+            build_track(g)+
+            f"\n👉 {g.names[g.current()]}'s turn 🎲"
+        )
 
 # ---------------- DICE ----------------
 
 async def handle_dice(update,context):
-
     msg=update.message
     if msg.dice.emoji!="🎲": return
 
     chat=msg.chat.id
-    user=update.effective_user
+    u=update.effective_user
     g=games.get(chat)
 
-    if not g or not g.started or user.id!=g.current(): return
+    if not g or not g.started or u.id!=g.current(): return
 
-    await roll(msg,g,user.id,msg.dice.value)
+    await roll(msg,g,u.id,msg.dice.value)
 
 # ---------------- ROLL ----------------
 
-async def roll(msg,g,player,dice):
+async def roll(msg,g,p,dice):
+    pos=g.positions[p]
+    text=f"{g.colors[p]} {g.names[p]} rolled {dice}\n"
 
-    pos=g.positions[player]
+    if pos==-1 and dice!=6:
+        g.next()
+        await msg.reply_text(text+"Need 6")
+        await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
+        return
 
-    text=f"{g.colors[player]} {g.names[player]} rolled {dice}\n"
+    pos=0 if pos==-1 else pos+dice
 
-# ENTER BOARD
-    if pos==-1:
-        if dice!=6:
-            g.next()
-            await msg.reply_text(text+"Need 6")
-            await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
-            return
-        pos=0
+    if pos>TRACK_LENGTH:
+        g.next()
+        await msg.reply_text(text+"Need exact")
+        await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
+        return
 
-# MOVE
-    else:
-        if pos+dice>TRACK_LENGTH:
-            g.next()
-            await msg.reply_text(text+"Need exact")
-            await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
-            return
-        pos+=dice
+    for o in g.players:
+        if o!=p and g.positions[o]==pos and pos not in SAFE_TILES:
+            g.positions[o]=-1
+            text+=f"💥 Killed {g.names[o]}\n"
 
-# KILL CHECK (no safety near end!)
-    for p in g.players:
-        if p!=player and g.positions[p]==pos and pos not in SAFE_TILES:
-            g.positions[p]=-1
-            text+=f"💥 Killed {g.names[p]}\n"
-
-# WIN
     if pos==TRACK_LENGTH:
-        name=g.names[player]
+        name=g.names[p]
         leaderboard[name]=leaderboard.get(name,0)+1
-
         await msg.reply_text(f"🥇 {name} finished!")
 
-        g.players.remove(player)
-        g.positions.pop(player,None)
+        g.players.remove(p)
+        g.positions.pop(p,None)
 
         if len(g.players)<=1:
             await msg.reply_text("🏁 Game Over")
-            del games[msg.chat.id]
+            games.pop(msg.chat.id,None)
             return
 
         fix_turn(g)
         await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
         return
 
-    g.positions[player]=pos
+    g.positions[p]=pos
 
     if dice!=6:
         g.next()
@@ -197,46 +309,23 @@ async def roll(msg,g,player,dice):
         f"\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
-# ---------------- BUTTONS ----------------
-
-async def button(update,context):
-
-    q=update.callback_query
-    await q.answer()
-
-    chat=q.message.chat.id
-    user=q.from_user
-    g=games.get(chat)
-
-    if not g: return
-
-    if q.data=="join_btn":
-        if user.id not in g.players and len(g.players)<4:
-            c=EMOJIS[len(g.players)]
-            g.players.append(user.id)
-            g.positions[user.id]=-1
-            g.names[user.id]=name_of(user)
-            g.colors[user.id]=c
-            await q.message.reply_text(f"{c} {g.names[user.id]} joined!")
-
-    elif q.data=="start_game":
-        if len(g.players)<2: return
-        g.started=True
-        await q.message.reply_text(
-            build_track(g)+
-            f"\n👉 {g.names[g.current()]}'s turn 🎲"
-        )
-
 # ---------------- RUN ----------------
 
 app=ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start",start))
-app.add_handler(CommandHandler("join",join_cmd))
+for cmd,func in {
+    "start":start,
+    "join":join_cmd,
+    "leave":leave_cmd,
+    "kick":kick_cmd,
+    "kill":kill_cmd,
+    "reload":reload_cmd,
+    "stats":stats
+}.items():
+    app.add_handler(CommandHandler(cmd,func))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("Ludo upgraded board running...")
+print("Ludo Ultimate Running...")
 app.run_polling()
-
