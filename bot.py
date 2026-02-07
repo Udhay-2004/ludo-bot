@@ -16,7 +16,7 @@ TRACK_LENGTH=52
 SAFE_TILES={0,8,13,21,26,34,39,47}
 EMOJIS=["🟥","🟦","🟩","🟨"]
 
-# -------- GAME --------
+# ---------- GAME ----------
 
 class LudoGame:
     def __init__(self,creator):
@@ -38,7 +38,7 @@ def fix_turn(g):
     if g.players and g.turn>=len(g.players):
         g.turn=0
 
-# -------- HELPERS --------
+# ---------- HELPERS ----------
 
 def valid_cmd(update,cmd):
     if not update.message or not update.message.text:
@@ -63,11 +63,10 @@ async def is_admin(update,uid):
 
 async def no_game(update):
     await update.message.reply_text(
-        "❌ No active game in this group.\n"
-        "Start one with /start@LudoooXBot 🎲"
+        "❌ No active game.\n/start@LudoooXBot to begin 🎲"
     )
 
-# -------- TRACK --------
+# ---------- BOARD ----------
 
 def build_track(g):
     t=["⬜"]*TRACK_LENGTH
@@ -87,40 +86,38 @@ def build_track(g):
         "".join(t[39:52])+"🏆"
     )
 
-# -------- COMMANDS --------
+# ---------- START ----------
 
 async def start(update,context):
     v=valid_cmd(update,"start")
     if v=="pm":
-        await update.message.reply_text("🎲 Play Ludo in a group!")
+        await update.message.reply_text("Play Ludo in a group 🎲")
         return
     if not v: return
 
     chat=update.effective_chat.id
-
     games[chat]=LudoGame(update.effective_user.id)
 
     kb=[[InlineKeyboardButton("🎮 Join",callback_data="join_btn")],
         [InlineKeyboardButton("🚀 Start",callback_data="start_game")]]
 
     await update.message.reply_text(
-        "✨ *Ludo Lobby Created!*\n\n"
-        "Players join using /join@LudoooXBot\n"
-        "2–4 players supported 🎯",
-        parse_mode="Markdown",
+        "✨ Ludo Lobby Created!\n"
+        "Use /join@LudoooXBot",
         reply_markup=InlineKeyboardMarkup(kb)
     )
+
+# ---------- JOIN ----------
 
 async def join_cmd(update,context):
     v=valid_cmd(update,"join")
     if v=="pm":
-        await update.message.reply_text("Join from a group 🙂")
+        await update.message.reply_text("Join from group 🙂")
         return
     if not v: return
 
     chat=update.effective_chat.id
     g=games.get(chat)
-
     if not g:
         await no_game(update)
         return
@@ -128,11 +125,11 @@ async def join_cmd(update,context):
     u=update.effective_user
 
     if u.id in g.players:
-        await update.message.reply_text("⚠️ You already joined.")
+        await update.message.reply_text("Already joined.")
         return
 
     if len(g.players)>=4:
-        await update.message.reply_text("🚫 Lobby full (4/4).")
+        await update.message.reply_text("Lobby full.")
         return
 
     c=EMOJIS[len(g.players)]
@@ -142,8 +139,10 @@ async def join_cmd(update,context):
     g.colors[u.id]=c
 
     await update.message.reply_text(
-        f"✅ {c} {g.names[u.id]} joined the lobby!"
+        f"{c} {g.names[u.id]} joined!"
     )
+
+# ---------- LEAVE ----------
 
 async def leave_cmd(update,context):
     v=valid_cmd(update,"leave")
@@ -177,10 +176,78 @@ async def leave_cmd(update,context):
     fix_turn(g)
 
     await update.message.reply_text(
-        f"👋 {name_of(u)} left the game."
+        f"👋 {name_of(u)} left."
     )
 
-# -------- KILL --------
+# ---------- KICK ----------
+
+async def kick_cmd(update,context):
+
+    v=valid_cmd(update,"kick")
+
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
+
+    chat=update.effective_chat.id
+    g=games.get(chat)
+
+    if not g:
+        await update.message.reply_text(
+            "❌ No game running."
+        )
+        return
+
+    user=update.effective_user
+
+    if not await is_admin(update,user.id) and user.id!=g.creator:
+        await update.message.reply_text(
+            "🚫 Admin/creator only."
+        )
+        return
+
+    target_id=None
+
+    if update.message.reply_to_message:
+        target_id=update.message.reply_to_message.from_user.id
+
+    elif context.args:
+        uname=context.args[0].replace("@","").lower()
+        for pid,name in g.names.items():
+            if uname in name.lower():
+                target_id=pid
+                break
+
+    if target_id not in g.players:
+        await update.message.reply_text(
+            "⚠️ Player not found."
+        )
+        return
+
+    name=g.names[target_id]
+    idx=g.players.index(target_id)
+
+    g.players.remove(target_id)
+    g.positions.pop(target_id,None)
+    g.names.pop(target_id,None)
+    g.colors.pop(target_id,None)
+
+    if idx<=g.turn and g.turn>0:
+        g.turn-=1
+
+    fix_turn(g)
+
+    await update.message.reply_text(
+        f"💥 {name} kicked!"
+    )
+
+    if g.started and len(g.players)>1:
+        await update.message.reply_text(
+            f"👉 {g.names[g.current()]}'s turn 🎲"
+        )
+
+# ---------- KILL ----------
 
 async def kill_cmd(update,context):
     v=valid_cmd(update,"kill")
@@ -194,27 +261,17 @@ async def kill_cmd(update,context):
 
     if not g:
         await update.message.reply_text(
-            "❌ No game running right now."
+            "❌ No game running."
         )
         return
 
-    u=update.effective_user
-
-    if not await is_admin(update,u.id):
-        await update.message.reply_text(
-            "🚫 Admins only."
-        )
+    if not await is_admin(update,update.effective_user.id):
         return
 
     games.pop(chat)
+    await update.message.reply_text("💥 Game ended.")
 
-    await update.message.reply_text(
-        "💥 *Game terminated.*\n"
-        "New game? /start@LudoooXBot",
-        parse_mode="Markdown"
-    )
-
-# -------- RELOAD --------
+# ---------- RELOAD ----------
 
 async def reload_cmd(update,context):
     v=valid_cmd(update,"reload")
@@ -223,18 +280,13 @@ async def reload_cmd(update,context):
         return
     if not v: return
 
-    if not games:
-        await update.message.reply_text("♻️ Nothing to reload.")
+    if not await is_admin(update,update.effective_user.id):
         return
 
     games.clear()
+    await update.message.reply_text("✅ Reloaded.")
 
-    await update.message.reply_text(
-        "✅ *Bot reloaded successfully!*",
-        parse_mode="Markdown"
-    )
-
-# -------- STATS --------
+# ---------- STATS ----------
 
 async def stats(update,context):
     v=valid_cmd(update,"stats")
@@ -244,16 +296,16 @@ async def stats(update,context):
     if not v: return
 
     if not leaderboard:
-        await update.message.reply_text("📊 No wins recorded yet.")
+        await update.message.reply_text("No stats yet.")
         return
 
-    text="🏆 *Global Leaderboard*\n\n"
+    text="🏆 Leaderboard\n\n"
     for n,w in sorted(leaderboard.items(),key=lambda x:x[1],reverse=True):
-        text+=f"⭐ {n} — {w} wins\n"
+        text+=f"{n} — {w} wins\n"
 
-    await update.message.reply_text(text,parse_mode="Markdown")
+    await update.message.reply_text(text)
 
-# -------- BUTTONS --------
+# ---------- BUTTONS ----------
 
 async def button(update,context):
     q=update.callback_query
@@ -261,7 +313,6 @@ async def button(update,context):
 
     chat=q.message.chat.id
     g=games.get(chat)
-
     if not g: return
 
     u=q.from_user
@@ -274,22 +325,17 @@ async def button(update,context):
             g.names[u.id]=name_of(u)
             g.colors[u.id]=c
             await q.message.reply_text(
-                f"🎉 {c} {g.names[u.id]} joined!"
+                f"{c} {g.names[u.id]} joined!"
             )
 
-    elif q.data=="start_game":
-        if len(g.players)<2:
-            await q.message.reply_text("Need 2+ players.")
-            return
-
+    elif q.data=="start_game" and len(g.players)>=2:
         g.started=True
-
         await q.message.reply_text(
             build_track(g)+
             f"\n👉 {g.names[g.current()]}'s turn 🎲"
         )
 
-# -------- DICE --------
+# ---------- DICE ----------
 
 async def handle_dice(update,context):
     msg=update.message
@@ -297,7 +343,6 @@ async def handle_dice(update,context):
 
     chat=msg.chat.id
     g=games.get(chat)
-
     if not g or not g.started: return
 
     u=update.effective_user
@@ -305,11 +350,11 @@ async def handle_dice(update,context):
 
     await roll(msg,g,u.id,msg.dice.value)
 
-# -------- ROLL --------
+# ---------- ROLL ----------
 
 async def roll(msg,g,p,dice):
-    pos=g.positions[p]
 
+    pos=g.positions[p]
     text=f"{g.colors[p]} {g.names[p]} rolled {dice}\n"
 
     if pos==-1 and dice!=6:
@@ -329,7 +374,7 @@ async def roll(msg,g,p,dice):
     for o in g.players:
         if o!=p and g.positions[o]==pos and pos not in SAFE_TILES:
             g.positions[o]=-1
-            text+=f"💥 {g.names[o]} sent home!\n"
+            text+=f"💥 {g.names[o]} out!\n"
 
     if pos==TRACK_LENGTH:
         name=g.names[p]
@@ -346,7 +391,9 @@ async def roll(msg,g,p,dice):
             return
 
         fix_turn(g)
-        await msg.reply_text(f"👉 {g.names[g.current()]}'s turn 🎲")
+        await msg.reply_text(
+            f"👉 {g.names[g.current()]}'s turn 🎲"
+        )
         return
 
     g.positions[p]=pos
@@ -359,18 +406,20 @@ async def roll(msg,g,p,dice):
         f"\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
-# -------- RUN --------
+# ---------- RUN ----------
 
 app=ApplicationBuilder().token(TOKEN).build()
 
 for c,f in {
     "start":start,"join":join_cmd,"leave":leave_cmd,
-    "kill":kill_cmd,"reload":reload_cmd,"stats":stats
+    "kick":kick_cmd,"kill":kill_cmd,
+    "reload":reload_cmd,"stats":stats
 }.items():
     app.add_handler(CommandHandler(c,f))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("✨ Ludo polished running...")
+print("🎲 Ludo bot running...")
 app.run_polling()
+
