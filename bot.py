@@ -64,6 +64,15 @@ async def no_game(update):
         "❌ No lobby.\n/new@LudoooXBot to create one 🎲"
     )
 
+def leaderboard_text():
+    if not leaderboard:
+        return "📊 No wins yet."
+
+    txt="🏆 Leaderboard\n\n"
+    for n,w in sorted(leaderboard.items(),key=lambda x:x[1],reverse=True):
+        txt+=f"⭐ {n} — {w} wins\n"
+    return txt
+
 # ---------- BOARD ----------
 
 def build_track(g):
@@ -83,15 +92,6 @@ def build_track(g):
         "    "+" ".join(t[26:39])+"\n\n"+
         "🏆 "+" ".join(t[39:52])
     )
-
-def leaderboard_text():
-    if not leaderboard:
-        return "📊 No wins yet."
-
-    txt="🏆 Leaderboard\n\n"
-    for n,w in sorted(leaderboard.items(),key=lambda x:x[1],reverse=True):
-        txt+=f"⭐ {n} — {w} wins\n"
-    return txt
 
 # ---------- NEW LOBBY ----------
 
@@ -114,7 +114,7 @@ async def new_cmd(update,context):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-# ---------- START GAME ----------
+# ---------- START ----------
 
 async def start_cmd(update,context):
     v=valid_cmd(update,"start")
@@ -235,15 +235,16 @@ async def kick_cmd(update,context):
         await update.message.reply_text("🚫 Admin/creator only.")
         return
 
-    target=None
-
-    if update.message.reply_to_message:
-        target=update.message.reply_to_message.from_user.id
-
-    if not target or target not in g.players:
-        await update.message.reply_text("Reply to a player to kick.")
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Reply to player to kick.")
         return
 
+    target=update.message.reply_to_message.from_user.id
+
+    if target not in g.players:
+        return
+
+    idx=g.players.index(target)
     name=g.names[target]
 
     g.available_colors.append(g.colors[target])
@@ -252,6 +253,24 @@ async def kick_cmd(update,context):
     g.positions.pop(target,None)
     g.colors.pop(target,None)
     g.names.pop(target,None)
+
+    # END GAME CHECK
+    if len(g.players)==1:
+        winner=g.players[0]
+        wname=g.names[winner]
+
+        leaderboard[wname]=leaderboard.get(wname,0)+1
+
+        await update.message.reply_text(
+            f"🏆 {wname} wins by default!"
+        )
+        await update.message.reply_text(leaderboard_text())
+
+        games.pop(chat)
+        return
+
+    if idx<g.turn:
+        g.turn-=1
 
     fix_turn(g)
 
@@ -278,6 +297,17 @@ async def kill_cmd(update,context):
     games.pop(chat)
 
     await update.message.reply_text("💥 Game ended.")
+
+# ---------- STATS ----------
+
+async def stats(update,context):
+    v=valid_cmd(update,"stats")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
+
+    await update.message.reply_text(leaderboard_text())
 
 # ---------- DICE ----------
 
@@ -389,11 +419,12 @@ for c,f in {
     "skip":skip_cmd,
     "kick":kick_cmd,
     "kill":kill_cmd,
+    "stats":stats,
 }.items():
     app.add_handler(CommandHandler(c,f))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("🎲 Ludo fully loaded...")
+print("🎲 Ludo final stable running...")
 app.run_polling()
