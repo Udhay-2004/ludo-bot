@@ -14,7 +14,6 @@ leaderboard={}
 
 TRACK_LENGTH=52
 SAFE_TILES={0,8,13,21,26,34,39,47}
-
 ALL_COLORS=["🟥","🟦","🟩","🟨"]
 
 # ---------- GAME ----------
@@ -53,8 +52,8 @@ def valid_cmd(update,cmd):
 
     return txt.startswith(f"/{cmd}@{BOT_USERNAME}")
 
-def display_name(u):
-    return u.first_name  # no usernames anywhere
+def name_of(u):
+    return u.first_name
 
 async def is_admin(update,uid):
     m=await update.effective_chat.get_member(uid)
@@ -62,7 +61,7 @@ async def is_admin(update,uid):
 
 async def no_game(update):
     await update.message.reply_text(
-        "❌ No active game.\n/start@LudoooXBot to begin 🎲"
+        "❌ No lobby.\n/new@LudoooXBot to create one 🎲"
     )
 
 # ---------- BOARD ----------
@@ -78,7 +77,6 @@ def build_track(g):
         if t[s]=="▫️":
             t[s]="⭐"
 
-    # lane style layout
     return (
         "🏁 "+" ".join(t[:13])+"\n\n"+
         "    "+" ".join(t[13:26])+"\n\n"+
@@ -95,24 +93,58 @@ def leaderboard_text():
         txt+=f"⭐ {n} — {w} wins\n"
     return txt
 
-# ---------- START ----------
+# ---------- NEW LOBBY ----------
 
-async def start(update,context):
-    v=valid_cmd(update,"start")
+async def new_cmd(update,context):
+    v=valid_cmd(update,"new")
     if v=="pm":
-        await update.message.reply_text("Play in a group 🎲")
+        await update.message.reply_text("Create lobby in group 🎲")
         return
     if not v: return
 
     chat=update.effective_chat.id
     games[chat]=LudoGame(update.effective_user.id)
 
-    kb=[[InlineKeyboardButton("🎮 Join",callback_data="join_btn")],
-        [InlineKeyboardButton("🚀 Start",callback_data="start_game")]]
+    kb=[[InlineKeyboardButton("🎮 Join",callback_data="join_btn")]]
 
     await update.message.reply_text(
-        "✨ Ludo Lobby Created!\nUse /join@LudoooXBot",
+        "✨ New Ludo Lobby!\n\n"
+        "Players join: /join@LudoooXBot\n"
+        "Start: /start@LudoooXBot",
         reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+# ---------- START GAME ----------
+
+async def start_cmd(update,context):
+    v=valid_cmd(update,"start")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
+
+    chat=update.effective_chat.id
+    g=games.get(chat)
+
+    if not g:
+        await no_game(update); return
+
+    user=update.effective_user
+
+    if user.id!=g.creator and not await is_admin(update,user.id):
+        await update.message.reply_text("Only creator/admin can start.")
+        return
+
+    if len(g.players)<2:
+        await update.message.reply_text("Need 2+ players.")
+        return
+
+    g.started=True
+
+    await update.message.reply_text(
+        "🎲 Game Started!\n\n"+
+        build_track(g)+
+        f"\n\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
 # ---------- JOIN ----------
@@ -132,93 +164,120 @@ async def join_cmd(update,context):
     u=update.effective_user
 
     if u.id in g.players:
-        await update.message.reply_text("Already joined."); return
+        return
 
     if not g.available_colors:
-        await update.message.reply_text("Lobby full."); return
+        await update.message.reply_text("Lobby full.")
+        return
 
-    color=g.available_colors.pop(0)
+    c=g.available_colors.pop(0)
 
     g.players.append(u.id)
     g.positions[u.id]=-1
-    g.names[u.id]=display_name(u)
-    g.colors[u.id]=color
+    g.names[u.id]=name_of(u)
+    g.colors[u.id]=c
 
     await update.message.reply_text(
-        f"{color} {g.names[u.id]} joined!"
+        f"{c} {g.names[u.id]} joined!"
     )
 
-# ---------- LEAVE ----------
+# ---------- SKIP ----------
 
-async def leave_cmd(update,context):
-    v=valid_cmd(update,"leave")
+async def skip_cmd(update,context):
+    v=valid_cmd(update,"skip")
     if v=="pm":
-        await update.message.reply_text("Use in group."); return
+        await update.message.reply_text("Use in group.")
+        return
     if not v: return
 
     chat=update.effective_chat.id
     g=games.get(chat)
-    if not g:
-        await no_game(update); return
 
-    u=update.effective_user
-    if u.id not in g.players: return
+    if not g or not g.started:
+        await update.message.reply_text("❌ No active game.")
+        return
 
-    color=g.colors[u.id]
-    g.available_colors.append(color)
+    user=update.effective_user
 
-    idx=g.players.index(u.id)
+    if user.id!=g.creator and not await is_admin(update,user.id):
+        await update.message.reply_text("🚫 Admin/creator only.")
+        return
 
-    g.players.remove(u.id)
-    g.positions.pop(u.id,None)
-    g.names.pop(u.id,None)
-    g.colors.pop(u.id,None)
+    skipped=g.current()
+    skipped_name=g.names[skipped]
 
-    if idx<=g.turn and g.turn>0:
-        g.turn-=1
+    g.next()
 
-    fix_turn(g)
-    await update.message.reply_text("Left game.")
+    await update.message.reply_text(
+        f"⏭ {skipped_name} skipped.\n"
+        f"👉 {g.names[g.current()]}'s turn 🎲"
+    )
 
-# ---------- STATS ----------
+# ---------- KICK ----------
 
-async def stats(update,context):
-    v=valid_cmd(update,"stats")
+async def kick_cmd(update,context):
+    v=valid_cmd(update,"kick")
     if v=="pm":
-        await update.message.reply_text("Use in group."); return
+        await update.message.reply_text("Use in group.")
+        return
     if not v: return
 
-    await update.message.reply_text(leaderboard_text())
-
-# ---------- BUTTONS ----------
-
-async def button(update,context):
-    q=update.callback_query
-    await q.answer()
-
-    chat=q.message.chat.id
+    chat=update.effective_chat.id
     g=games.get(chat)
-    if not g: return
 
-    u=q.from_user
+    if not g:
+        await update.message.reply_text("❌ No game running.")
+        return
 
-    if q.data=="join_btn":
-        if u.id not in g.players and g.available_colors:
-            color=g.available_colors.pop(0)
-            g.players.append(u.id)
-            g.positions[u.id]=-1
-            g.names[u.id]=display_name(u)
-            g.colors[u.id]=color
-            await q.message.reply_text(
-                f"{color} {g.names[u.id]} joined!"
-            )
+    user=update.effective_user
 
-    elif q.data=="start_game" and len(g.players)>=2:
-        g.started=True
-        await q.message.reply_text(
-            build_track(g)+
-            f"\n\n👉 {g.names[g.current()]}'s turn 🎲"
-        )
+    if user.id!=g.creator and not await is_admin(update,user.id):
+        await update.message.reply_text("🚫 Admin/creator only.")
+        return
+
+    target=None
+
+    if update.message.reply_to_message:
+        target=update.message.reply_to_message.from_user.id
+
+    if not target or target not in g.players:
+        await update.message.reply_text("Reply to a player to kick.")
+        return
+
+    name=g.names[target]
+
+    g.available_colors.append(g.colors[target])
+
+    g.players.remove(target)
+    g.positions.pop(target,None)
+    g.colors.pop(target,None)
+    g.names.pop(target,None)
+
+    fix_turn(g)
+
+    await update.message.reply_text(f"💥 {name} kicked.")
+
+# ---------- KILL ----------
+
+async def kill_cmd(update,context):
+    v=valid_cmd(update,"kill")
+    if v=="pm":
+        await update.message.reply_text("Use in group.")
+        return
+    if not v: return
+
+    chat=update.effective_chat.id
+
+    if chat not in games:
+        await update.message.reply_text("❌ No game running.")
+        return
+
+    if not await is_admin(update,update.effective_user.id):
+        return
+
+    games.pop(chat)
+
+    await update.message.reply_text("💥 Game ended.")
 
 # ---------- DICE ----------
 
@@ -268,7 +327,6 @@ async def roll(msg,g,p,dice):
 
         await msg.reply_text(f"🏆 {name} finished!")
 
-        # free color
         g.available_colors.append(g.colors[p])
 
         g.players.remove(p)
@@ -298,20 +356,44 @@ async def roll(msg,g,p,dice):
         f"\n\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
+# ---------- BUTTONS ----------
+
+async def button(update,context):
+    q=update.callback_query
+    await q.answer()
+
+    chat=q.message.chat.id
+    g=games.get(chat)
+    if not g: return
+
+    u=q.from_user
+
+    if q.data=="join_btn" and u.id not in g.players and g.available_colors:
+        c=g.available_colors.pop(0)
+        g.players.append(u.id)
+        g.positions[u.id]=-1
+        g.names[u.id]=name_of(u)
+        g.colors[u.id]=c
+        await q.message.reply_text(
+            f"{c} {g.names[u.id]} joined!"
+        )
+
 # ---------- RUN ----------
 
 app=ApplicationBuilder().token(TOKEN).build()
 
 for c,f in {
-    "start":start,
+    "new":new_cmd,
+    "start":start_cmd,
     "join":join_cmd,
-    "leave":leave_cmd,
-    "stats":stats
+    "skip":skip_cmd,
+    "kick":kick_cmd,
+    "kill":kill_cmd,
 }.items():
     app.add_handler(CommandHandler(c,f))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("🎲 Ludo improved running...")
+print("🎲 Ludo fully loaded...")
 app.run_polling()
