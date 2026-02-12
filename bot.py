@@ -6,20 +6,21 @@ from telegram.ext import (
     MessageHandler, filters
 )
 
-TOKEN = os.getenv("TOKEN")
-BOT_USERNAME = "LudoooXBot"
+TOKEN=os.getenv("TOKEN")
+BOT_USERNAME="LudoooXBot"
 
-games = {}
-leaderboard = {}
+games={}
+leaderboard={}
 
-TRACK_LENGTH = 52
-SAFE_TILES = {0,8,13,21,26,34,39,47}
-EMOJIS = ["🟥","🟦","🟩","🟨"]
+TRACK_LENGTH=52
+SAFE_TILES={0,8,13,21,26,34,39,47}
+
+ALL_COLORS=["🟥","🟦","🟩","🟨"]
 
 # ---------- GAME ----------
 
 class LudoGame:
-    def __init__(self, creator):
+    def __init__(self,creator):
         self.players=[]
         self.positions={}
         self.turn=0
@@ -27,6 +28,7 @@ class LudoGame:
         self.names={}
         self.colors={}
         self.creator=creator
+        self.available_colors=ALL_COLORS.copy()
 
     def current(self):
         return self.players[self.turn]
@@ -44,15 +46,15 @@ def valid_cmd(update,cmd):
     if not update.message or not update.message.text:
         return False
 
-    txt = update.message.text.strip()
+    txt=update.message.text.strip()
 
     if update.effective_chat.type=="private":
         return "pm"
 
     return txt.startswith(f"/{cmd}@{BOT_USERNAME}")
 
-def name_of(u):
-    return f"{u.first_name} (@{u.username})" if u.username else u.first_name
+def display_name(u):
+    return u.first_name  # no usernames anywhere
 
 async def is_admin(update,uid):
     m=await update.effective_chat.get_member(uid)
@@ -66,29 +68,30 @@ async def no_game(update):
 # ---------- BOARD ----------
 
 def build_track(g):
-    t=["⬜"]*TRACK_LENGTH
+    t=["▫️"]*TRACK_LENGTH
 
     for p,pos in g.positions.items():
         if 0<=pos<TRACK_LENGTH:
             t[pos]=g.colors[p]
 
     for s in SAFE_TILES:
-        if t[s]=="⬜":
+        if t[s]=="▫️":
             t[s]="⭐"
 
+    # lane style layout
     return (
-        "🏁"+"".join(t[:13])+"\n"+
-        "".join(t[13:26])+"\n"+
-        "".join(t[26:39])+"\n"+
-        "".join(t[39:52])+"🏆"
+        "🏁 "+" ".join(t[:13])+"\n\n"+
+        "    "+" ".join(t[13:26])+"\n\n"+
+        "    "+" ".join(t[26:39])+"\n\n"+
+        "🏆 "+" ".join(t[39:52])
     )
 
 def leaderboard_text():
     if not leaderboard:
-        return "📊 No wins recorded yet."
+        return "📊 No wins yet."
 
     txt="🏆 Leaderboard\n\n"
-    for n,w in sorted(leaderboard.items(), key=lambda x:x[1], reverse=True):
+    for n,w in sorted(leaderboard.items(),key=lambda x:x[1],reverse=True):
         txt+=f"⭐ {n} — {w} wins\n"
     return txt
 
@@ -97,7 +100,7 @@ def leaderboard_text():
 async def start(update,context):
     v=valid_cmd(update,"start")
     if v=="pm":
-        await update.message.reply_text("Play Ludo in a group 🎲")
+        await update.message.reply_text("Play in a group 🎲")
         return
     if not v: return
 
@@ -117,7 +120,7 @@ async def start(update,context):
 async def join_cmd(update,context):
     v=valid_cmd(update,"join")
     if v=="pm":
-        await update.message.reply_text("Join from a group 🙂")
+        await update.message.reply_text("Join from group 🙂")
         return
     if not v: return
 
@@ -131,16 +134,19 @@ async def join_cmd(update,context):
     if u.id in g.players:
         await update.message.reply_text("Already joined."); return
 
-    if len(g.players)>=4:
+    if not g.available_colors:
         await update.message.reply_text("Lobby full."); return
 
-    c=EMOJIS[len(g.players)]
+    color=g.available_colors.pop(0)
+
     g.players.append(u.id)
     g.positions[u.id]=-1
-    g.names[u.id]=name_of(u)
-    g.colors[u.id]=c
+    g.names[u.id]=display_name(u)
+    g.colors[u.id]=color
 
-    await update.message.reply_text(f"{c} {g.names[u.id]} joined!")
+    await update.message.reply_text(
+        f"{color} {g.names[u.id]} joined!"
+    )
 
 # ---------- LEAVE ----------
 
@@ -158,6 +164,9 @@ async def leave_cmd(update,context):
     u=update.effective_user
     if u.id not in g.players: return
 
+    color=g.colors[u.id]
+    g.available_colors.append(color)
+
     idx=g.players.index(u.id)
 
     g.players.remove(u.id)
@@ -169,93 +178,7 @@ async def leave_cmd(update,context):
         g.turn-=1
 
     fix_turn(g)
-    await update.message.reply_text(f"👋 {name_of(u)} left.")
-
-# ---------- KICK ----------
-
-async def kick_cmd(update,context):
-    v=valid_cmd(update,"kick")
-    if v=="pm":
-        await update.message.reply_text("Use in group."); return
-    if not v: return
-
-    chat=update.effective_chat.id
-    g=games.get(chat)
-    if not g:
-        await update.message.reply_text("❌ No game running."); return
-
-    user=update.effective_user
-
-    if not await is_admin(update,user.id) and user.id!=g.creator:
-        await update.message.reply_text("🚫 Admin/creator only."); return
-
-    target_id=None
-
-    if update.message.reply_to_message:
-        target_id=update.message.reply_to_message.from_user.id
-
-    elif context.args:
-        uname=context.args[0].replace("@","").lower()
-        for pid,name in g.names.items():
-            if uname in name.lower():
-                target_id=pid; break
-
-    if target_id not in g.players:
-        await update.message.reply_text("⚠️ Player not found."); return
-
-    name=g.names[target_id]
-    idx=g.players.index(target_id)
-
-    g.players.remove(target_id)
-    g.positions.pop(target_id,None)
-    g.names.pop(target_id,None)
-    g.colors.pop(target_id,None)
-
-    if idx<=g.turn and g.turn>0:
-        g.turn-=1
-
-    fix_turn(g)
-
-    await update.message.reply_text(f"💥 {name} kicked!")
-
-    if g.started and len(g.players)>1:
-        await update.message.reply_text(
-            f"👉 {g.names[g.current()]}'s turn 🎲"
-        )
-
-# ---------- KILL ----------
-
-async def kill_cmd(update,context):
-    v=valid_cmd(update,"kill")
-    if v=="pm":
-        await update.message.reply_text("Use in group."); return
-    if not v: return
-
-    chat=update.effective_chat.id
-    g=games.get(chat)
-
-    if not g:
-        await update.message.reply_text("❌ No game running."); return
-
-    if not await is_admin(update,update.effective_user.id):
-        return
-
-    games.pop(chat)
-    await update.message.reply_text("💥 Game ended.")
-
-# ---------- RELOAD ----------
-
-async def reload_cmd(update,context):
-    v=valid_cmd(update,"reload")
-    if v=="pm":
-        await update.message.reply_text("Use in group."); return
-    if not v: return
-
-    if not await is_admin(update,update.effective_user.id):
-        return
-
-    games.clear()
-    await update.message.reply_text("✅ Reloaded.")
+    await update.message.reply_text("Left game.")
 
 # ---------- STATS ----------
 
@@ -280,21 +203,21 @@ async def button(update,context):
     u=q.from_user
 
     if q.data=="join_btn":
-        if u.id not in g.players and len(g.players)<4:
-            c=EMOJIS[len(g.players)]
+        if u.id not in g.players and g.available_colors:
+            color=g.available_colors.pop(0)
             g.players.append(u.id)
             g.positions[u.id]=-1
-            g.names[u.id]=name_of(u)
-            g.colors[u.id]=c
+            g.names[u.id]=display_name(u)
+            g.colors[u.id]=color
             await q.message.reply_text(
-                f"{c} {g.names[u.id]} joined!"
+                f"{color} {g.names[u.id]} joined!"
             )
 
     elif q.data=="start_game" and len(g.players)>=2:
         g.started=True
         await q.message.reply_text(
             build_track(g)+
-            f"\n👉 {g.names[g.current()]}'s turn 🎲"
+            f"\n\n👉 {g.names[g.current()]}'s turn 🎲"
         )
 
 # ---------- DICE ----------
@@ -336,16 +259,22 @@ async def roll(msg,g,p,dice):
     for o in g.players:
         if o!=p and g.positions[o]==pos and pos not in SAFE_TILES:
             g.positions[o]=-1
-            text+=f"💥 {g.names[o]} sent home!\n"
+            text+=f"💥 {g.names[o]} out!\n"
 
     if pos==TRACK_LENGTH:
+
         name=g.names[p]
         leaderboard[name]=leaderboard.get(name,0)+1
 
         await msg.reply_text(f"🏆 {name} finished!")
 
+        # free color
+        g.available_colors.append(g.colors[p])
+
         g.players.remove(p)
         g.positions.pop(p,None)
+        g.colors.pop(p,None)
+        g.names.pop(p,None)
 
         if len(g.players)<=1:
             await msg.reply_text("🎉 Game Over!")
@@ -366,7 +295,7 @@ async def roll(msg,g,p,dice):
 
     await msg.reply_text(
         text+build_track(g)+
-        f"\n👉 {g.names[g.current()]}'s turn 🎲"
+        f"\n\n👉 {g.names[g.current()]}'s turn 🎲"
     )
 
 # ---------- RUN ----------
@@ -374,15 +303,15 @@ async def roll(msg,g,p,dice):
 app=ApplicationBuilder().token(TOKEN).build()
 
 for c,f in {
-    "start":start,"join":join_cmd,"leave":leave_cmd,
-    "kick":kick_cmd,"kill":kill_cmd,
-    "reload":reload_cmd,"stats":stats
+    "start":start,
+    "join":join_cmd,
+    "leave":leave_cmd,
+    "stats":stats
 }.items():
     app.add_handler(CommandHandler(c,f))
 
 app.add_handler(CallbackQueryHandler(button))
 app.add_handler(MessageHandler(filters.Dice.ALL,handle_dice))
 
-print("🎲 Ludo bot running...")
+print("🎲 Ludo improved running...")
 app.run_polling()
-
